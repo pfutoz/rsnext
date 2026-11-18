@@ -430,26 +430,54 @@ async function loadHw(forceRefresh = false) {
         document.getElementById('snmpComm').value = sa.community || 'public';
     }
 
-    // 物理ドライブベイ描画 (Arrayとの紐付け表示)
+    // 物理ドライブベイ描画 (RAIDXpert2 物理Slot <-> Array member_slots 正確紐付け ＆ OS起動ドライブ明示)
     document.getElementById('storageSourceBadge').textContent = `コントローラ情報源: ${(tel.storage && tel.storage.source) || '-'}`;
     const arrays = (tel.storage && tel.storage.arrays) ? tel.storage.arrays : [];
+    const volMap = {};
+    (tel.volumes || []).forEach(v => { if (v.drive) volMap[String(v.drive).toUpperCase()] = v; });
+
     document.getElementById('physicalBays').innerHTML = disks.map(d => {
-        // モデル・サイズから対応アレイを補助表示
-        let mappedArr = '';
+        let cand = null;
         if (arrays.length > 0) {
-            const cand = arrays.find(a => a.os_disk === d.slot) || null;
-            if (cand) mappedArr = `Array #${cand.array_id} (${cand.drive || cand.type} ${cand.name}) [${cand.state}]`;
+            cand = arrays.find(a => Array.isArray(a.member_slots) && a.member_slots.includes(d.slot)) || null;
         }
+        const drv = String(d.drive || (cand && cand.drive) || '').toUpperCase();
+        const vInfo = drv ? (volMap[drv] || null) : null;
+        const isBoot = Boolean(d.is_boot || (cand && cand.is_boot) || drv === 'C:');
+        const arrId = d.array_id || (cand && cand.array_id) || null;
+        const arrState = d.array_state || (cand && cand.state) || '';
+        const arrName = d.array_name || (cand && cand.name) || '';
+        const volLabel = d.volume_label || (vInfo && vInfo.label) || '';
+        const volRole = d.volume_role || (vInfo && vInfo.role) || '';
+
+        let mappedLine = '';
+        if (drv || arrId) {
+            const parts = [];
+            if (arrId) parts.push(`Array #${arrId}`);
+            if (drv) {
+                const lblStr = (volLabel && volLabel !== drv) ? ` [${volLabel}]` : '';
+                parts.push(`${isBoot ? '🪟 ' : '💿 '}${drv}${lblStr}`);
+            }
+            if (arrName && arrName !== volLabel) parts.push(`(${arrName})`);
+            else if (volRole) parts.push(`— ${volRole}`);
+            if (arrState) parts.push(`[${arrState}]`);
+            mappedLine = parts.join(' ');
+        }
+
+        const bootBadge = isBoot
+            ? ` <span style="background:#1d4ed8;color:#ffffff;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:800;margin-left:4px;">🪟 OS起動ドライブ (${esc(drv || 'C:')})</span>`
+            : (drv ? ` <span style="background:#e0f2fe;color:#0369a1;padding:1px 7px;border-radius:999px;font-size:0.68rem;font-weight:800;margin-left:4px;">${esc(drv)}</span>` : '');
+
         return `
-            <div class="bay-card ${d.healthy ? 'healthy' : 'fault'}">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <strong style="font-size:0.86rem;color:#0f172a;">💽 Physical Slot #${d.slot}: ${esc(d.model)}</strong>
+            <div class="bay-card ${d.healthy ? 'healthy' : 'fault'}" style="${isBoot ? 'border-color:#60a5fa;background:#eff6ff;' : ''}">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <strong style="font-size:0.86rem;color:#0f172a;">💽 Physical Slot #${d.slot}: ${esc(d.model)}${bootBadge}</strong>
                     <span class="${d.healthy ? 'pill-ok' : 'pill-err'}">${d.healthy ? '🟢 ' + esc(d.state) : '🚨 ' + esc(d.state)}</span>
                 </div>
                 <div style="font-size:0.75rem;color:#334155;margin-top:5px;line-height:1.5;">
                     容量: <strong>${esc(d.size)}</strong> ／ バス: <code>${esc(d.bus)} (${esc(d.link_speed)})</code><br>
                     S/N: <code>${esc(d.serial)}</code> ／ FW: <code>${esc(d.firmware)}</code> ／ SMART監視: <strong>${esc(d.smart_poll)}</strong>
-                    ${mappedArr ? `<br><span style="color:#0f766e;font-weight:700;">➔ ${esc(mappedArr)}</span>` : ''}
+                    ${mappedLine ? `<br><span style="color:${isBoot ? '#1d4ed8' : '#0f766e'};font-weight:800;">➔ ${esc(mappedLine)}</span>` : ''}
                 </div>
             </div>
         `;
@@ -458,10 +486,12 @@ async function loadHw(forceRefresh = false) {
     // 論理ドライブ描画
     document.getElementById('volumesList').innerHTML = (tel.volumes || []).map(v => {
         const barCol = v.status === 'CRITICAL' ? '#dc2626' : (v.status === 'WARN' ? '#d97706' : v.color);
+        const isBootVol = Boolean(v.is_boot || String(v.drive).toUpperCase() === 'C:');
+        const icon = isBootVol ? '🪟' : (String(v.drive).toUpperCase() === 'H:' ? '🗄️' : '💿');
         return `
-            <div style="padding:9px 12px;border:1px solid var(--border-light);border-radius:9px;background:#f8fafc;">
-                <div style="display:flex;justify-content:space-between;font-size:0.83rem;font-weight:800;">
-                    <span>💿 <strong>${esc(v.drive)}</strong> [${esc(v.label)}] — <span style="color:${esc(v.color)};">${esc(v.role)}</span></span>
+            <div style="padding:9px 12px;border:1px solid ${isBootVol ? '#93c5fd' : 'var(--border-light)'};border-radius:9px;background:${isBootVol ? '#eff6ff' : '#f8fafc'};">
+                <div style="display:flex;justify-content:space-between;font-size:0.83rem;font-weight:800;gap:8px;flex-wrap:wrap;">
+                    <span>${icon} <strong>${esc(v.drive)}</strong> [${esc(v.label)}] — <span style="color:${esc(v.color)};">${esc(v.role)}</span></span>
                     <span>使用率 ${v.used_percent}% (空き <strong>${v.free_gb.toLocaleString()} GB</strong> / ${v.total_gb.toLocaleString()} GB)</span>
                 </div>
                 <div class="mini-bar"><div style="width:${v.used_percent}%;background:${barCol};"></div></div>

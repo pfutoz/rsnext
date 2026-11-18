@@ -204,8 +204,9 @@ def read_static_hw_profile() -> dict:
 
 
 def collect_drive_volumes() -> list[dict]:
+    sys_drive = (os.environ.get("SystemDrive") or "C:").upper()
     role_map = {
-        "C:": ("OS / システム・DB", "#475569"),
+        "C:": ("OS起動ドライブ / システム・DB", "#475569"),
         "D:": ("過去アーカイブ SSD #1 (本番)", "#0284c7"),
         "E:": ("現役データ SSD #2 (本番)", "#2563eb"),
         "F:": ("アーカイブ ミラー SSD #3", "#0d9488"),
@@ -246,6 +247,7 @@ def collect_drive_volumes() -> list[dict]:
         vols.append(
             {
                 "drive": letter,
+                "is_boot": letter.upper() == sys_drive,
                 "label": vol_name_buf.value or letter,
                 "filesystem": fs_name_buf.value or "NTFS",
                 "role": role_label,
@@ -332,13 +334,115 @@ def parse_rcadm_qa(text: str) -> dict:
                         "size": m.group(7),
                         "task": m.group(9),
                         "name": "" if arr_name == "..." else arr_name,
+                        "member_slots": [],
                     }
                 )
 
     return {"source": "AMD_RAIDXPERT2", "disks": disks, "arrays": arrays}
 
 
-def query_physical_storage() -> dict:
+def parse_rcadm_array_details(detail_text: str, arrays: list[dict]) -> None:
+    arr_by_id = {int(a["array_id"]): a for a in arrays}
+    cur_arr = None
+    for raw_line in detail_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        m_hdr = re.match(r"^<ARRAY:(\d+)>$", line, re.I)
+        if m_hdr:
+            aid = int(m_hdr.group(1))
+            cur_arr = arr_by_id.get(aid)
+            if cur_arr is None:
+                cur_arr = {
+                    "array_id": aid,
+                    "type": "VOLUME",
+                    "os_disk": -1,
+                    "is_boot": False,
+                    "drive": "",
+                    "state": "NORMAL",
+                    "healthy": True,
+                    "size": "",
+                    "task": "NOT_ACTIVE",
+                    "name": "",
+                    "member_slots": [],
+                }
+                arrays.append(cur_arr)
+                arr_by_id[aid] = cur_arr
+            continue
+
+        if cur_arr is None:
+            continue
+
+        m_mp = re.match(r"^Mount Points:\s*\.+\s*(.+)$", line, re.I)
+        if m_mp:
+            mp = m_mp.group(1).strip()
+            m_drv = re.search(r"([A-Z]:)", mp)
+            if m_drv:
+                cur_arr["drive"] = m_drv.group(1).upper()
+            continue
+
+        m_sys = re.match(r"^System Device:\s*\.+\s*(Yes|No)\b", line, re.I)
+        if m_sys:
+            cur_arr["is_boot"] = m_sys.group(1).lower() == "yes"
+            continue
+
+        m_nm = re.match(r"^Array name:\s*\.+\s*(.+)$", line, re.I)
+        if m_nm:
+            nm = m_nm.group(1).strip().strip('"').strip()
+            if nm and nm.lower() not in ("<none>", "...", "none"):
+                cur_arr["name"] = nm
+            continue
+
+        # メンバー物理ディスク行 (例: "5     500.1GB    0.0MB Online   NoError" / "0       4.0TB  537.0MB Online   NoError")
+        m_disk = re.match(r"^(\d+)\s+\d+(?:\.\d+)?[TGMP]B\s+\d+(?:\.\d+)?[TGMP]B\s+\S+", line)
+        if m_disk:
+            slot_num = int(m_disk.group(1))
+            if slot_num not in cur_arr["member_slots"]:
+                cur_arr["member_slots"].append(slot_num)
+
+
+def bind_disks_to_arrays_and_volumes(disks: list[dict], arrays: list[dict], volumes: list[dict] | None = None) -> None:
+    vols_by_drive = {str(v.get("drive", "")).upper(): v for v in (volumes or [])}
+    sys_drive = (os.environ.get("SystemDrive") or "C:").upper()
+
+    # 万が一詳細取得が空だった場合のサイズ一意フォールバック (例: 500.1GB -> C:, 8.0TB -> H:)
+    any_members = any(a.get("member_slots") for a in arrays)
+    if not any_members and arrays and disks:
+        used_slots = set()
+        for a in arrays:
+            same_sz = [d for d in disks if d.get("size") == a.get("size") and d["slot"] not in used_slots]
+            if len(same_sz) == 1:
+                a["member_slots"] = [same_sz[0]["slot"]]
+                used_slots.add(same_sz[0]["slot"])
+
+    slot_to_arr: dict[int, dict] = {}
+    for a in arrays:
+        drv = str(a.get("drive") or "").upper()
+        if drv == sys_drive:
+            a["is_boot"] = True
+        vinfo = vols_by_drive.get(drv)
+        if vinfo:
+            a["volume_label"] = vinfo.get("label") or ""
+            a["volume_role"] = vinfo.get("role") or ""
+        for sl in a.get("member_slots") or []:
+            slot_to_arr[int(sl)] = a
+
+    for d in disks:
+        arr = slot_to_arr.get(int(d["slot"]))
+        if arr:
+            drv = str(arr.get("drive") or "").upper()
+            vinfo = vols_by_drive.get(drv) or {}
+            d["array_id"] = arr["array_id"]
+            d["drive"] = drv
+            d["is_boot"] = bool(arr.get("is_boot") or drv == sys_drive)
+            d["array_name"] = arr.get("name") or ""
+            d["array_type"] = arr.get("type") or ""
+            d["array_state"] = arr.get("state") or ""
+            d["volume_label"] = vinfo.get("label") or arr.get("volume_label") or ""
+            d["volume_role"] = vinfo.get("role") or arr.get("volume_role") or ""
+
+
+def query_physical_storage(volumes: list[dict] | None = None) -> dict:
     if os.path.isfile(RCADM_DEFAULT_PATH):
         try:
             p = subprocess.run(
@@ -351,6 +455,21 @@ def query_physical_storage() -> dict:
             )
             parsed = parse_rcadm_qa(p.stdout + "\n" + p.stderr)
             if parsed["disks"]:
+                try:
+                    p_det = subprocess.run(
+                        [RCADM_DEFAULT_PATH, "-M", "-q", "-a", *[str(a["array_id"]) for a in parsed["arrays"]], "-v"],
+                        capture_output=True,
+                        text=True,
+                        encoding="cp932",
+                        errors="replace",
+                        timeout=8,
+                    )
+                    det_out = p_det.stdout + "\n" + p_det.stderr
+                    parse_rcadm_array_details(det_out, parsed["arrays"])
+                except Exception as det_err:
+                    logger.warning("rcadm array detail query failed: %s", det_err)
+
+                bind_disks_to_arrays_and_volumes(parsed["disks"], parsed["arrays"], volumes)
                 return parsed
         except Exception as e:
             logger.warning("rcadm query failed: %s", e)
@@ -801,16 +920,23 @@ class HardwareMonitorService:
                     except OSError:
                         pass
 
-                now_mono = time.monotonic()
-                if force_deep or (now_mono - self._last_deep_ts) >= 60.0:
-                    self._last_deep_ts = now_mono
-                    self._deep_cache["storage"] = query_physical_storage()
-                    self._deep_cache["hw_events"] = query_system_hw_events()
-                    self._deep_cache["lan_nodes"] = probe_lan_and_snmp_targets(self.cfg)
-
                 cpu_pct = self._sample_cpu_percent()
                 mem = get_memory_info()
                 vols = collect_drive_volumes()
+
+                now_mono = time.monotonic()
+                if force_deep or (now_mono - self._last_deep_ts) >= 60.0:
+                    self._last_deep_ts = now_mono
+                    self._deep_cache["storage"] = query_physical_storage(vols)
+                    self._deep_cache["hw_events"] = query_system_hw_events()
+                    self._deep_cache["lan_nodes"] = probe_lan_and_snmp_targets(self.cfg)
+                elif self._deep_cache["storage"].get("disks"):
+                    bind_disks_to_arrays_and_volumes(
+                        self._deep_cache["storage"]["disks"],
+                        self._deep_cache["storage"].get("arrays") or [],
+                        vols,
+                    )
+
                 nics, rx_mbps, tx_mbps = self._sample_nics()
                 svcs = self._check_local_services()
                 up_sec = get_uptime_sec()
@@ -893,4 +1019,29 @@ class HardwareMonitorService:
                 logger.warning("HardwareMonitor tick error: %s", e)
 
             self._stop_evt.wait(10.0)
+
+
+def refresh_storage_telemetry_now() -> dict:
+    vols = collect_drive_volumes()
+    storage = query_physical_storage(vols)
+    snap = {}
+    if os.path.isfile(HW_TELEMETRY_FILE):
+        try:
+            with open(HW_TELEMETRY_FILE, "r", encoding="utf-8") as f:
+                snap = json.load(f)
+        except Exception:
+            snap = {}
+    snap["updated_at"] = datetime.now().astimezone().isoformat()
+    snap["volumes"] = vols
+    snap["storage"] = storage
+    atomic_write_json(HW_TELEMETRY_FILE, snap)
+    return snap
+
+
+if __name__ == "__main__":
+    if "--refresh-storage-now" in sys.argv:
+        out = refresh_storage_telemetry_now()
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        print(json.dumps({"status": "success", "disks": len(out.get("storage", {}).get("disks", []))}))
+
 

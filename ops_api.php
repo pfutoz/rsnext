@@ -30,7 +30,12 @@ try {
     if ($action === 'hw_status') {
         if (!empty($req['refresh'])) {
             @file_put_contents($tmpDir . '/hw_force_refresh.flag', date('c'));
-            usleep(600000);
+            $py = rsnext_find_python();
+            $cmd = escapeshellarg($py) . ' -m ingest_service.hw_monitor --refresh-storage-now 2>&1';
+            $cwd = getcwd();
+            chdir(__DIR__);
+            @exec($cmd);
+            if ($cwd) chdir($cwd);
         }
         $telFile = $tmpDir . '/hw_telemetry.json';
         $hisFile = $tmpDir . '/hw_history.json';
