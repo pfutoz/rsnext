@@ -20,8 +20,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("医療法人小野会 RS-Base / RS-Next 共通クライアント連携＆RSViewerインストーラー (ゼロSMB・HTTP連携・CD書込・自動更新)")]
 [assembly: AssemblyCompany("医療法人小野会 おの肛門科胃腸科内視鏡クリニック")]
 [assembly: AssemblyProduct("RS-Base / RS-Next Client Integration Installer")]
-[assembly: AssemblyVersion("2.4.0.0")]
-[assembly: AssemblyFileVersion("2.4.0.0")]
+[assembly: AssemblyVersion("2.4.3.0")]
+[assembly: AssemblyFileVersion("2.4.3.0")]
 
 namespace RSBaseInstaller
 {
@@ -115,7 +115,7 @@ namespace RSBaseInstaller
             Font baseFont = new Font("Yu Gothic UI", 9.5f, FontStyle.Regular);
             this.Font = baseFont;
             this.AutoScaleMode = AutoScaleMode.Dpi;
-            this.Text = "RS-Base / RS-Next 共通PC連携ツール セットアップ (v2.4.0)";
+            this.Text = "RS-Base / RS-Next 共通PC連携ツール セットアップ (v2.4.3)";
             this.ClientSize = new Size(560, 420);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -665,7 +665,8 @@ namespace RSBaseInstaller
             byte[] vbsBytes = null;
             byte[] ps1Bytes = null;
             byte[] httpLaunchBytes = null;
-            string resolvedVer = "2.4.0";
+            byte[] resetExeBytes = null;
+            string resolvedVer = "2.4.3";
             string usedSource = "";
             string bust = "?t=" + DateTime.UtcNow.Ticks;
 
@@ -685,6 +686,7 @@ namespace RSBaseInstaller
                         vbsBytes = candVbs;
                         ps1Bytes = candPs1;
                         try { httpLaunchBytes = TryHttpGetBytes(baseUrl + "/rsview_http_launch.ps1" + bust, 5000); } catch { }
+                        try { resetExeBytes = TryHttpGetBytes(baseUrl + "/RSBaseReset.exe" + bust, 5000); } catch { }
                         resolvedVer = verTxt;
                         usedSource = baseUrl;
                         stepLog("HTTPサーバー (" + baseUrl + ") から最新版 v" + resolvedVer + " を取得しました。");
@@ -781,6 +783,29 @@ namespace RSBaseInstaller
             {
                 File.WriteAllBytes(targetHttpPs1, httpLaunchBytes);
                 NativeMethods.UnblockFile(targetHttpPs1);
+            }
+            if (resetExeBytes != null && resetExeBytes.Length > 2048)
+            {
+                string targetResetExe = Path.Combine(targetDir, "RSBaseReset.exe");
+                try
+                {
+                    File.WriteAllBytes(targetResetExe, resetExeBytes);
+                    NativeMethods.UnblockFile(targetResetExe);
+                    using (RegistryKey rk = Registry.CurrentUser.CreateSubKey(@"Software\Classes\rsnext-reset"))
+                    {
+                        if (rk != null)
+                        {
+                            rk.SetValue("", "URL:RS-Next / RS-Base Viewer Reset Protocol");
+                            rk.SetValue("URL Protocol", "");
+                            using (RegistryKey ck = rk.CreateSubKey(@"shell\open\command"))
+                            {
+                                if (ck != null) ck.SetValue("", "\"" + targetResetExe + "\" \"%1\"");
+                            }
+                        }
+                    }
+                    stepLog("ダンマリ復旧リセットツール (RSBaseReset.exe / rsnext-reset://) を登録しました。");
+                }
+                catch { }
             }
             File.WriteAllText(Path.Combine(targetDir, "watcher_version.txt"), resolvedVer + "\n", Encoding.ASCII);
 

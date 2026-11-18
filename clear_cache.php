@@ -284,6 +284,9 @@ $stats = rsnext_collect_all_stats($categories, $tmpRoot);
             <button type="button" class="btn btn-teal" onclick="clearClientDicomCache()">
                 💻 このPCのRSViewerキャッシュをクリア
             </button>
+            <button type="button" class="btn" style="background:#d97706;color:#fff;border-color:#f59e0b;font-weight:800;" onclick="window.location.href='rsnext-reset://reset?t='+Date.now()">
+                🔄 RSViewer・常駐連携を強制リセット
+            </button>
         </div>
     </div>
 
@@ -361,3 +364,4 @@ async function clearClientDicomCache() {
 </script>
 </body>
 </html>
+

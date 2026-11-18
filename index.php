@@ -20,12 +20,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '')
     $folder     = trim((string)($_POST['folder'] ?? ''));
     $launchMode = strtoupper(trim((string)($_POST['launch_mode'] ?? 'HTTP_DICOM')));
 
+    $bundleUrlOut = '';
+    $cacheKeyOut  = '';
     if ($launchMode === 'HTTP_DICOM' || $launchMode === 'NORMAL') {
         if ($studyId <= 0 && $folder === '') {
             echo json_encode(['status' => 'error', 'message' => '検査IDまたはフォルダパスが空です'], JSON_UNESCAPED_UNICODE);
             exit;
         }
         $triggerLine = rsnext_build_http_dicom_trigger_line($studyId, $folder);
+        $parts = explode('|', $triggerLine, 3);
+        $bundleUrlOut = $parts[1] ?? '';
+        $cacheKeyOut  = $parts[2] ?? '';
     } else {
         if ($folder === '' && $studyId > 0) {
             try {
@@ -50,7 +55,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '')
     $clientIp = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     if ($clientIp === '::1') $clientIp = '127.0.0.1';
     $ok = rsnext_write_client_trigger('trigger', $clientIp, $triggerLine, $tmpDir);
-    echo json_encode(['status' => $ok ? 'success' : 'error', 'mode' => $launchMode], JSON_UNESCAPED_UNICODE);
+    echo json_encode([
+        'status'     => $ok ? 'success' : 'error',
+        'mode'       => $launchMode,
+        'bundle_url' => $bundleUrlOut,
+        'cache_key'  => $cacheKeyOut,
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -539,6 +549,7 @@ function build_query_url(array $overrides): string {
         <a href="backup_manager.php" class="rs-nav-link">🛡️ バックアップ</a>
         <a href="cd_export.php<?= $patientId !== '' ? '?patient_id=' . rawurlencode($patientId) : '' ?>" class="rs-nav-link">💿 CD作成</a>
         <a href="clear_cache.php" target="_blank" class="rs-nav-link" title="サーバー＆クライアント一時キャッシュ管理・強制クリア">🧹 キャッシュ</a>
+        <button type="button" class="rs-nav-link" style="cursor:pointer;background:rgba(245,158,11,0.22);border-color:rgba(251,191,36,0.55);color:#fef3c7;" onclick="triggerViewerEmergencyReset()" title="RSViewerが起動しない・ダンマリになった時にクリック（残存プロセス強制終了＆常駐watcher再起動）">🔄 連携リセット</button>
         <a href="client_logs.php" target="_blank" class="rs-nav-link" title="192.168.1.16/rsbase 共通常駐モジュール稼働状況">🖥️ 常駐端末</a>
         <a href="仕様書/index.html" target="_blank" class="rs-nav-link">📚 仕様書</a>
     </nav>
@@ -955,8 +966,26 @@ function build_query_url(array $overrides): string {
 
 <div class="rs-toast" id="rsToast"></div>
 
+<!-- RSViewer 起動ステータス ＆ ダンマリ時ワンクリック復旧ドック -->
+<div id="rsvRecoveryDock" style="display:none;position:fixed;right:18px;bottom:18px;z-index:2600;background:#0f172a;color:#f8fafc;border:1px solid #38bdf8;border-radius:10px;padding:10px 14px;box-shadow:0 10px 28px rgba(0,0,0,0.45);min-width:340px;max-width:480px;font-size:0.82rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+        <strong id="rsvDockStatus" style="color:#7dd3fc;">🌀 RSViewer を起動しています...</strong>
+        <button type="button" onclick="hideRsvDock()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.95rem;line-height:1;">✕</button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <button type="button" id="rsvDockResetBtn" onclick="relaunchViaResetProtocol()" style="background:#d97706;color:#fff;border:1px solid #fbbf24;border-radius:6px;padding:4px 10px;font-size:0.78rem;font-weight:800;cursor:pointer;" title="無反応・ダンマリ時にクリック：裏のRSViewerを強制リセットし常駐を再起動して直接開きます">
+            🔄 リセットして強制再起動
+        </button>
+        <button type="button" id="rsvDockWebBtn" onclick="openFallbackWebViewer()" style="background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:6px;padding:4px 10px;font-size:0.78rem;font-weight:700;cursor:pointer;" title="ブラウザ内蔵のWebビューワで別タブ表示します">
+            🌐 Webビューワで開く
+        </button>
+        <a href="RSBaseSetup.exe" style="color:#94a3b8;font-size:0.73rem;text-decoration:underline;margin-left:auto;" title="未導入PC用インストーラ">初期導入</a>
+    </div>
+</div>
+
 <script>
 const CURRENT_MODE = <?= json_encode($mode) ?>;
+let lastRsvContext = { studyId: 0, bundleUrl: '', cacheKey: '', timer: null, token: 0 };
 
 function showToast(msg) {
     const t = document.getElementById('rsToast');
@@ -965,7 +994,65 @@ function showToast(msg) {
     setTimeout(() => t.classList.remove('show'), 3200);
 }
 
+function hideRsvDock() {
+    const dock = document.getElementById('rsvRecoveryDock');
+    if (dock) dock.style.display = 'none';
+    if (lastRsvContext.timer) {
+        clearTimeout(lastRsvContext.timer);
+        lastRsvContext.timer = null;
+    }
+}
+
+function triggerViewerEmergencyReset() {
+    fetch(`index.php?action=check_launch&cleanup=1&t=${Date.now()}`).catch(() => {});
+    showToast('🔄 RSViewer・常駐連携の強制リセットを起動しています...');
+    window.location.href = 'rsnext-reset://reset?t=' + Date.now();
+}
+
+function relaunchViaResetProtocol() {
+    fetch(`index.php?action=check_launch&cleanup=1&t=${Date.now()}`).catch(() => {});
+    const stEl = document.getElementById('rsvDockStatus');
+    if (stEl) {
+        stEl.textContent = '🔄 強制リセット＆直接起動を実行中...';
+        stEl.style.color = '#fcd34d';
+    }
+    if (lastRsvContext.bundleUrl) {
+        const u = 'rsnext-reset://relaunch?url=' + encodeURIComponent(lastRsvContext.bundleUrl)
+                + '&key=' + encodeURIComponent(lastRsvContext.cacheKey || '')
+                + '&t=' + Date.now();
+        window.location.href = u;
+    } else {
+        window.location.href = 'rsnext-reset://reset?t=' + Date.now();
+    }
+    if (lastRsvContext.timer) clearTimeout(lastRsvContext.timer);
+    lastRsvContext.timer = setTimeout(hideRsvDock, 6000);
+}
+
+function openFallbackWebViewer() {
+    if (lastRsvContext.studyId > 0) {
+        window.open(`dicom_view.php?study_id=${lastRsvContext.studyId}`, '_blank');
+        hideRsvDock();
+    }
+}
+
 function launchLocalRsViewer(studyId, folderPath, launchMode, toastMsg) {
+    const myToken = ++lastRsvContext.token;
+    if (lastRsvContext.timer) clearTimeout(lastRsvContext.timer);
+    lastRsvContext.studyId = studyId || 0;
+    lastRsvContext.bundleUrl = '';
+    lastRsvContext.cacheKey = '';
+
+    const dock = document.getElementById('rsvRecoveryDock');
+    const stEl = document.getElementById('rsvDockStatus');
+    const webBtn = document.getElementById('rsvDockWebBtn');
+    if (dock && stEl) {
+        dock.style.borderColor = '#38bdf8';
+        stEl.style.color = '#7dd3fc';
+        stEl.textContent = toastMsg || '🌀 RSViewer を起動しています...';
+        if (webBtn) webBtn.style.display = studyId > 0 ? '' : 'none';
+        dock.style.display = 'block';
+    }
+
     const fd = new URLSearchParams({
         action: 'launch',
         study_id: String(studyId || 0),
@@ -975,29 +1062,51 @@ function launchLocalRsViewer(studyId, folderPath, launchMode, toastMsg) {
     fetch('index.php', { method: 'POST', body: fd })
         .then(r => r.json())
         .then(async d => {
+            if (myToken !== lastRsvContext.token) return;
             if (d.status !== 'success') {
-                alert('ビューワ起動エラー: ' + (d.message || '不明なエラー'));
+                if (stEl) {
+                    stEl.textContent = '⚠️ トリガーエラー: ' + (d.message || '不明');
+                    stEl.style.color = '#fca5a5';
+                }
                 return;
             }
-            showToast(toastMsg || '🚀 ローカル RSViewer を起動しています...');
+            lastRsvContext.bundleUrl = d.bundle_url || '';
+            lastRsvContext.cacheKey  = d.cache_key || '';
+
             let pickedUp = false;
-            for (let i = 0; i < 6; i++) {
+            for (let i = 0; i < 5; i++) {
                 await new Promise(res => setTimeout(res, 700));
+                if (myToken !== lastRsvContext.token) return;
                 try {
                     const chk = await (await fetch(`index.php?action=check_launch&t=${Date.now()}`)).json();
                     if (chk.consumed) {
                         pickedUp = true;
-                        showToast('✅ クライアント受信完了 — DICOM転送＆RSViewerを起動しています...');
+                        if (stEl) {
+                            stEl.textContent = '✅ 起動指示完了（出ない時は下の「リセット再起動」）';
+                            stEl.style.color = '#6ee7b7';
+                        }
+                        lastRsvContext.timer = setTimeout(() => {
+                            if (myToken === lastRsvContext.token) hideRsvDock();
+                        }, 6500);
                         break;
                     }
                 } catch (_) {}
             }
-            if (!pickedUp) {
+            if (!pickedUp && myToken === lastRsvContext.token) {
                 fetch(`index.php?action=check_launch&cleanup=1&t=${Date.now()}`).catch(() => {});
-                alert('⚠️ このPCで常駐連携ツール (watcher.vbs) が応答しませんでした。\n\n初めて利用するPCまたは常駐停止中の場合は、画面上部の「🖥️ 常駐端末」または「RSBaseSetup.exe」を一度実行してください。');
+                if (dock && stEl) {
+                    dock.style.borderColor = '#f59e0b';
+                    stEl.style.color = '#fcd34d';
+                    stEl.textContent = '⚠️ 常駐ツール無応答 — 「リセットして強制再起動」を押してください';
+                }
             }
         })
-        .catch(e => alert('通信エラー: ' + e.message));
+        .catch(e => {
+            if (stEl) {
+                stEl.textContent = '⚠️ 通信エラー: ' + e.message;
+                stEl.style.color = '#fca5a5';
+            }
+        });
 }
 
 // ビューワ起動制御（断層データはローカルRSViewer直起動・その他は別タブWebビューワ）

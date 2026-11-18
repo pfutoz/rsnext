@@ -1,7 +1,7 @@
-' --- watcher.vbs v2.4.2 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + TForm_MIV2 Foreground + Mutex Reset) ---
+' --- watcher.vbs v2.4.3 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + Emergency Reset Protocol Auto-Register) ---
 Option Explicit
 
-Const WATCHER_VERSION = "2.4.2"
+Const WATCHER_VERSION = "2.4.3"
 
 Dim objShell, objFSO, network, prodRoot, localRoot, prodHttpBase, rsnextHttpBase, localHttpBase
 Dim normalExePath, ecgExePath
@@ -408,9 +408,39 @@ Function ResolveHttpLauncherPs1()
     On Error Goto 0
 End Function
 
+Sub EnsureResetToolAndProtocol(hintBaseUrl)
+    Dim resetExe, bust
+    On Error Resume Next
+    If LCase(selfDirPath & "\") = LCase(localRoot) Or LCase(selfDirPath & "\") = LCase(prodRoot) Or LCase(selfDirPath & "\") = "c:\apache24\htdocs\rsnext\" Then
+        On Error Goto 0
+        Exit Sub
+    End If
+
+    resetExe = selfDirPath & "\RSBaseReset.exe"
+    If Not objFSO.FileExists(resetExe) Then
+        bust = "?t=" & CLng(Timer * 100)
+        If Len(hintBaseUrl) > 0 Then
+            Call HttpDownloadBinary(hintBaseUrl & "/RSBaseReset.exe" & bust, resetExe)
+        End If
+        If Not objFSO.FileExists(resetExe) Then
+            Call HttpDownloadBinary(rsnextHttpBase & "/RSBaseReset.exe" & bust, resetExe)
+        End If
+        If Not objFSO.FileExists(resetExe) Then
+            Call HttpDownloadBinary(prodHttpBase & "/RSBaseReset.exe" & bust, resetExe)
+        End If
+    End If
+
+    If objFSO.FileExists(resetExe) Then
+        objShell.RegWrite "HKCU\Software\Classes\rsnext-reset\", "URL:RS-Next / RS-Base Viewer Reset Protocol", "REG_SZ"
+        objShell.RegWrite "HKCU\Software\Classes\rsnext-reset\URL Protocol", "", "REG_SZ"
+        objShell.RegWrite "HKCU\Software\Classes\rsnext-reset\shell\open\command\", """" & resetExe & """ ""%1""", "REG_SZ"
+    End If
+    On Error Goto 0
+End Sub
+
 Sub CheckSelfUpdate(smbState)
     Dim baseCandidates, i, baseUrl, remoteVer, activeBaseUrl
-    Dim selfPath, selfDir, tmpVbs, tmpPs1, dstPs1, tmpHttpPs1, dstHttpPs1, fChk, chkHead, cacheBust
+    Dim selfPath, selfDir, tmpVbs, tmpPs1, dstPs1, tmpHttpPs1, dstHttpPs1, tmpResetExe, dstResetExe, fChk, chkHead, cacheBust
 
     On Error Resume Next
     cacheBust = "?t=" & CLng(Timer * 100)
@@ -443,20 +473,23 @@ Sub CheckSelfUpdate(smbState)
         Exit Sub
     End If
 
-    dstHttpPs1 = selfDir & "\rsview_http_launch.ps1"
+    dstHttpPs1  = selfDir & "\rsview_http_launch.ps1"
+    dstResetExe = selfDir & "\RSBaseReset.exe"
     If activeBaseUrl <> "" And (Not objFSO.FileExists(dstHttpPs1)) Then
         Call HttpDownloadBinary(activeBaseUrl & "/rsview_http_launch.ps1" & cacheBust, dstHttpPs1)
     End If
+    Call EnsureResetToolAndProtocol(activeBaseUrl)
 
     If activeBaseUrl = "" Or remoteVer = WATCHER_VERSION Then
         On Error Goto 0
         Exit Sub
     End If
 
-    tmpVbs     = selfDir & "\watcher.vbs.upd"
-    tmpPs1     = selfDir & "\cd_burn.ps1.upd"
-    dstPs1     = selfDir & "\cd_burn.ps1"
-    tmpHttpPs1 = selfDir & "\rsview_http_launch.ps1.upd"
+    tmpVbs      = selfDir & "\watcher.vbs.upd"
+    tmpPs1      = selfDir & "\cd_burn.ps1.upd"
+    dstPs1      = selfDir & "\cd_burn.ps1"
+    tmpHttpPs1  = selfDir & "\rsview_http_launch.ps1.upd"
+    tmpResetExe = selfDir & "\RSBaseReset.exe.upd"
 
     If HttpDownloadBinary(activeBaseUrl & "/watcher.vbs" & cacheBust, tmpVbs) Then
         chkHead = ""
@@ -473,6 +506,11 @@ Sub CheckSelfUpdate(smbState)
             If HttpDownloadBinary(activeBaseUrl & "/rsview_http_launch.ps1" & cacheBust, tmpHttpPs1) Then
                 objFSO.CopyFile tmpHttpPs1, dstHttpPs1, True
                 objFSO.DeleteFile tmpHttpPs1, True
+            End If
+            If HttpDownloadBinary(activeBaseUrl & "/RSBaseReset.exe" & cacheBust, tmpResetExe) Then
+                objFSO.CopyFile tmpResetExe, dstResetExe, True
+                objFSO.DeleteFile tmpResetExe, True
+                Call EnsureResetToolAndProtocol(activeBaseUrl)
             End If
 
             Err.Clear
