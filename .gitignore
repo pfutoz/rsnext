@@ -1,0 +1,23 @@
+# RS-Next Runtime, Medical Storage & Local Secrets
+__pycache__/
+*.py[cod]
+
+# Medical image storage, caches, inbox/outbox, quarantine (NEVER commit patient data)
+storage_data/*
+!storage_data/.gitkeep
+
+# Runtime state & triggers
+tmp/*
+!tmp/.gitkeep
+
+# Local / Production configuration containing DB & EMR credentials
+config/server_config.json
+config/server_config.production_2025.json
+
+# Logs, backups, editor & OS metadata
+*.log
+*.bak
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store

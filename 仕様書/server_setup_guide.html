@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⑦ Windows Server 2025 実機構築・ソフトウェア非RAID化手順書 — RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <!-- 共通グローバルナビゲーション -->
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+            <a href="mwl_order_spec.html">⑥ 撮影依頼・DICOM MWL</a>
+            <a href="server_setup_guide.html" class="active">⑦ Server 2025 構築手順</a>
+        </div>
+    </nav>
+
+    <!-- ヒーローヘッダー -->
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">🚀 実機デプロイ手順書</span>
+            <span class="badge badge-glass">対象機: 192.168.1.163 (WIN-ROQ5QCB5CCE)</span>
+            <span class="badge badge-glass">CドライブOS完全温存・BIOS変更不要</span>
+        </div>
+        <h1>⑦ Windows Server 2025（192.168.1.163）スクラップ＆ビルド構築手順書</h1>
+        <p>
+            新サーバ（<code>192.168.1.163</code> / MSI <code>MS-7E16</code> / Windows Server 2025 Standard）の <strong>Cドライブ（OS）を一切フォーマットせず温存</strong>したまま、
+            データ用SSDのRAIDをWindows上から安全にソフトウェア解除（単体4TB SSD×4本化）し、自動構築スクリプト（<code>server_setup/*.ps1</code>）で
+            <strong>PostgreSQL 18・Apache 2.4・PHP 8・DICOM MWL/Storage SCP・自動ミラー＆夜間バックアップ</strong>を一括構築する手順書です。
+        </p>
+        <div class="hero-meta">
+            <span>🖥️ 対象サーバ: <code>192.168.1.163</code> (RDP接続可)</span>
+            <span>📂 自動化キット: <code>C:\Apache24\htdocs\rsnext\server_setup\</code></span>
+            <span>🛡️ 旧本番機 <code>192.168.1.164</code> は完全 Read-Only 保護</span>
+        </div>
+    </header>
+
+    <!-- ページ内目次 -->
+    <div class="toc-bar">
+        <strong>📌 構築ステップ:</strong>
+        <a href="#sec-safety">🛡️ 安全保護ルール・ディスク構成図</a>
+        <a href="#sec-step1">Step 1: パッケージ転送 (開発PC)</a>
+        <a href="#sec-step2">Step 2: ソフトウェアRAID分割 (RDP)</a>
+        <a href="#sec-step3">Step 3: 旧DB停止＆D:〜H:自動整備</a>
+        <a href="#sec-step4">Step 4: DB・Web・MWL・ミラー一括構築</a>
+        <a href="#sec-step5">Step 5: 動作確認・心電図LAN・事前移行</a>
+    </div>
+
+    <!-- 0. 安全保護ルールとディスク構成 Before/After -->
+    <section class="card" id="sec-safety">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🛡️</span><span>0. 絶対安全ルールとストレージ再編マップ（実機調査済）</span></div>
+            <span class="badge badge-green">実機ハードウェア確認済</span>
+        </div>
+
+        <div class="alert alert-danger" style="border-left: 5px solid #dc2626; background: #fef2f2;">
+            <div class="alert-title" style="color:#991b1b; font-weight:700;">⚠️ 作業前に必ずご確認ください（CドライブOS保護のための重要事項）</div>
+            <ul style="margin: 8px 0 0 18px; color:#7f1d1d;">
+                <li><strong>BIOSのSATA/NVMeモードは「RAID」のまま変更しないでください</strong>：新サーバ（MSI <code>MS-7E16</code>）は現在 <code>AMD-RAID (rcraid.sys)</code> ドライバでCドライブを起動しています。BIOS画面でいきなりAHCIに変更するとCドライブが起動不能（ブルースクリーン）になります。<strong>BIOSには一切触れず、Windows上の「AMD RAIDXpert2」からデータ用アレイ（Array 2）だけを単体分割</strong>します。</li>
+                <li><strong>Disk 0（Cドライブ：<code>CT500P3PSSD8</code> 約465GB）は絶対に削除・初期化しないでください</strong>：自動スクリプト側でも <code>IsBoot / IsSystem</code> 判定によりCドライブを完全除外しています。</li>
+                <li><strong>旧サーバ <code>192.168.1.164</code> には一切変更を加えません</strong>：本番IP引き継ぎまでは <code>192.168.1.163</code> のまま独立稼働・並行テストできます。</li>
+            </ul>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:22%;">物理ディスク（実機確認値）</th>
+                        <th style="width:28%;">現在の状態（変更前）</th>
+                        <th style="width:25%;">変更後の割当</th>
+                        <th>RS-Next での役割・自動同期設定</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>500GB NVMe SSD</strong><br><code>CT500P3PSSD8</code></td>
+                        <td>Disk 0 (<code>C:</code> 465.8 GB)<br>Windows Server 2025 OS</td>
+                        <td><strong><code>C:</code>（無変更・完全温存）</strong></td>
+                        <td>OS ＋ Apache 2.4 ＋ PHP 8 ＋ PostgreSQL 18 ＋ 高速サムネイルキャッシュ (<code>C:\RSNextData\cache</code>) ※旧PostgreSQL 9.3のみ自動無効化</td>
+                    </tr>
+                    <tr>
+                        <td><strong>4TB SSD #1</strong></td>
+                        <td rowspan="4" style="vertical-align:middle; background:#fffbeb;">
+                            Disk 1 (<code>D:</code> 7,451 GB)<br>
+                            <strong><code>AMD-RAID Array 2</code></strong><br>
+                            （旧テストデータ約40GBのみ・破棄OK）
+                        </td>
+                        <td><strong><code>D:</code> <code>VOL_ARCHIVE_SSD1</code></strong><br>(単体NTFS 約3,726 GB)</td>
+                        <td><strong>過去アーカイブ原本領域（2000〜2021年）</strong><br><code>D:\rsnext_archive\studies\</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>4TB SSD #2</strong></td>
+                        <td><strong><code>E:</code> <code>VOL_ACTIVE_SSD2</code></strong><br>(単体NTFS 約3,726 GB)</td>
+                        <td><strong>現役リアルタイム原本領域（2022年〜現在）</strong><br><code>E:\rsnext_active\studies\</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>4TB SSD #3</strong></td>
+                        <td><strong><code>F:</code> <code>MIRROR_ARCH_SSD3</code></strong><br>(単体NTFS 約3,726 GB)</td>
+                        <td><strong><code>D:</code> の日次完全ミラー（毎日 01:30 自動同期）</strong><br>※万一 <code>D:</code> 故障時はドライブ文字を <code>F:➔D:</code> に変えるだけで1分復旧</td>
+                    </tr>
+                    <tr>
+                        <td><strong>4TB SSD #4</strong></td>
+                        <td><strong><code>G:</code> <code>MIRROR_ACT_SSD4</code></strong><br>(単体NTFS 約3,726 GB)</td>
+                        <td><strong><code>E:</code> の毎時完全ミラー（1時間おき自動同期）</strong><br>※万一 <code>E:</code> 故障時はドライブ文字を <code>G:➔E:</code> に変えるだけで1分復旧</td>
+                    </tr>
+                    <tr>
+                        <td><strong>8TB 高耐久HDD</strong><br><code>WDC WD80EFPX-68C</code></td>
+                        <td>Disk 2 (<code>E:</code> 7,452 GB)</td>
+                        <td><strong><code>H:</code> <code>RSNEXT_BACKUP_8TB</code></strong><br>(ドライブ文字のみ自動変更)</td>
+                        <td><strong>夜間統合バックアップ（毎日 23:00 自動実行）</strong><br>PostgreSQL <code>pg_dump</code>（30世代保持）＋原本データ退避</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Step 1 -->
+    <section class="card" id="sec-step1">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>⚡</span><span>【最短1クリック手順】すでに転送済みの全自動バッチを実行するだけ</span></div>
+            <span class="badge badge-green">転送・RAIDXpert2配置 完了済</span>
+        </div>
+        <div class="alert alert-purple" style="margin-bottom:12px;">
+            <div class="alert-title">✅ 事前準備（ファイル転送 ＆ AMD RAIDXpert2 配置）はすべて完了しています！</div>
+            新サーバ（<code>192.168.1.163</code>）には、すでに <code>C:\php</code>、<code>C:\Apache24\htdocs\rsnext</code>、および AMD純正 <code>C:\Program Files\RAIDXpert2\rcadm.exe</code> を配置済みです。<br>
+            リモートデスクトップ（<code>192.168.1.163</code>）で接続し、エクスプローラーで以下のファイルを右クリック ➔ <strong>「管理者として実行」</strong> するだけで、<strong>RAID分割（Array 2: <code>CT4000P3PSSD8</code>×4本のみ）➔ <code>D:〜H:</code> 整形 ➔ PostgreSQL 18 / Apache 2.4 / Python 3.13 / MWL常駐 / 自動ミラー登録</strong>まで一気通貫で完了します。
+        </div>
+        <pre style="background:#0f172a; color:#f8fafc; padding:16px; border-radius:8px; overflow-x:auto;"><code>C:\Apache24\htdocs\rsnext\server_setup\RUN_ALL_ON_SERVER.bat</code></pre>
+        <p style="margin-top:10px; color:#475569; font-size:0.9rem;">
+            ※ 開発PC側でプログラムを更新した後に再転送したい場合のみ、開発PCで <code>powershell -ExecutionPolicy Bypass -File "C:\Apache24\htdocs\rsnext\server_setup\00_send_package_to_server.ps1"</code> を実行してください（以下 Step 2〜Step 4 は <code>RUN_ALL_ON_SERVER.bat</code> が内部で自動実行する各ステップの詳細解説です）。
+        </p>
+    </section>
+
+    <!-- Step 2 -->
+    <section class="card" id="sec-step2">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔧</span><span>Step 2：リモートデスクトップ上でデータ用RAID（Array 2）を単体4本にソフトウェア分割</span></div>
+            <span class="badge badge-gold">新サーバ 192.168.1.163 RDP上で操作</span>
+        </div>
+        <p>
+            リモートデスクトップ（<code>mstsc</code> ➔ <code>192.168.1.163</code>）で新サーバに接続し、Windows上からデータ用アレイだけを4本の単体SSD（Non-RAID Volume）へ切り替えます（<strong>OS再起動・BIOS操作は一切不要</strong>です）。
+        </p>
+
+        <div class="grid-2" style="margin-top:14px;">
+            <div class="sub-card">
+                <h4>① AMD RAIDXpert2 管理ツールの起動（未導入の場合は導入）</h4>
+                <ol style="margin:8px 0 0 18px; line-height:1.7;">
+                    <li>スタートメニューに <strong><code>RAIDXpert2</code></strong> がある場合はそのまま起動します。</li>
+                    <li>まだ入っていない場合は、新サーバのブラウザで AMD 公式ドライバページ（<strong>Chipsets ➔ AMD Socket AM5 ➔ X670E ➔ AMD RAID Software</strong>）または MSI（<code>PRO X670-P WIFI / MS-7E16</code>）サポートページから <strong>AMD RAID Software (RAIDXpert2 Utility)</strong> をダウンロードしてインストールし、<code>RAIDXpert2</code> を開きます。</li>
+                </ol>
+            </div>
+            <div class="sub-card" style="background:#fffbeb; border-color:#fcd34d;">
+                <h4>② Array 2（7,451 GB）のみ削除 ➔ 単体 Volume × 4個 作成</h4>
+                <ol style="margin:8px 0 0 18px; line-height:1.7;">
+                    <li><strong>【厳重確認】</strong> 約500GBのOS用アレイ（<code>CT500P3PSSD8</code> / <code>C:</code>）と約8TBのHDD（<code>WDC WD80EFPX</code>）には<strong>絶対に触れないでください</strong>。</li>
+                    <li>メニュー <strong>Array ➔ Delete</strong> を開き、<strong>約 7,451 GB（7.45 TB）のデータ用アレイ（<code>Array 2</code>）のみ</strong>にチェックを入れて削除します。</li>
+                    <li>続いてメニュー <strong>Array ➔ Create</strong> を開き、RAID Level で <strong><code>Volume</code>（単体ディスク / Non-RAID）</strong> を選択し、空いた <strong>4TB SSD を1本だけ選択して作成（Create）</strong> します。</li>
+                    <li>同じ操作を残りの3本にも繰り返し、<strong>約 3,726 GB の単体 <code>Volume</code> を合計4個</strong>作成します。</li>
+                </ol>
+            </div>
+        </div>
+        <p style="margin-top:12px; color:#0f766e; font-weight:600;">
+            ✨ 4個作成すると即座に Windows が新しい単体4TB SSD×4本をプラグ＆プレイ認識します（フォーマットやドライブ文字設定は次の Step 3 スクリプトが全自動で行います）。
+        </p>
+    </section>
+
+    <!-- Step 3 -->
+    <section class="card" id="sec-step3">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>💾</span><span>Step 3：旧DBの停止 ＆ D:/E:/F:/G:/H: ドライブ・共有フォルダの全自動整備</span></div>
+            <span class="badge badge-purple">新サーバ 192.168.1.163 管理者PowerShell</span>
+        </div>
+        <p>
+            新サーバのリモートデスクトップ上で <strong>「Windows PowerShell（管理者として実行）」</strong> を開き、以下を実行します。
+        </p>
+        <pre style="background:#0f172a; color:#f8fafc; padding:16px; border-radius:8px; overflow-x:auto;"><code>powershell -ExecutionPolicy Bypass -File "C:\Apache24\htdocs\rsnext\server_setup\01_storage_and_cleanup.ps1"</code></pre>
+        <div class="table-wrap" style="margin-top:12px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:28%;">自動実行される処理</th>
+                        <th>内容</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>旧サービスの停止・無効化</strong></td>
+                        <td>不要な旧 <code>postgresql-x64-9.3</code> サービスを停止し、自動起動を <code>Disabled</code> に変更してポート <code>5432</code> を開放します。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>安全ガードチェック</strong></td>
+                        <td>万一 Step 2 のRAID解除前に実行された場合は何も壊さず案内メッセージを出して安全停止します。またブートディスク（<code>C:</code>）は絶対に対象外とします。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>H:</code> / <code>D:</code>〜<code>G:</code> 自動整形</strong></td>
+                        <td>8TB HDD のドライブ文字を <code>E:</code> ➔ <code>H:</code> へ移動し、4本の単体 4TB SSD を GPT / NTFS で高速フォーマットして <code>D:</code>, <code>E:</code>, <code>F:</code>, <code>G:</code> に自動割り当てします。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>フォルダ＆SMB共有作成</strong></td>
+                        <td><code>D:\rsnext_archive</code>、<code>E:\rsnext_active</code>、<code>F:</code>/<code>G:</code> ミラー先、<code>H:\rsnext_backup</code>、<code>C:\FUKUDA_ECG\ORG</code>、およびMALL3連携用SMB共有 <code>\\192.168.1.163\DRS</code>・<code>DRS2</code> を自動作成します。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Step 4 -->
+    <section class="card" id="sec-step4">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>⚙️</span><span>Step 4：PostgreSQL 18・Python 3.13・Apache 2.4・MWL常駐・自動ミラーの一括構築</span></div>
+            <span class="badge badge-purple">新サーバ 192.168.1.163 管理者PowerShell</span>
+        </div>
+        <p>
+            続けて同じ管理者 PowerShell ウィンドウで Step 4 スクリプトを実行します（インターネット経由で Python 3.13・PostgreSQL 18・DICOM通信パッケージも自動導入します）。
+        </p>
+        <pre style="background:#0f172a; color:#f8fafc; padding:16px; border-radius:8px; overflow-x:auto;"><code>powershell -ExecutionPolicy Bypass -File "C:\Apache24\htdocs\rsnext\server_setup\02_install_services_and_prod_config.ps1"</code></pre>
+        <div class="table-wrap" style="margin-top:12px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:28%;">自動構築コンポーネント</th>
+                        <th>セットアップ内容</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>ランタイム ＆ Python 3.13</strong></td>
+                        <td>Visual C++ x64 ランタイム、<code>C:\Python313</code>、および <code>pydicom</code> / <code>pynetdicom</code> / <code>pyftpdlib</code> / <code>watchdog</code> / <code>psycopg[binary]</code> / <code>Pillow</code> / <code>numpy</code> を一括導入。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>PostgreSQL 18 (UTF-8)</strong></td>
+                        <td>PostgreSQL 18 をポート <code>5432</code> に導入し、UTF-8 データベース <code>rsnext_db</code> と全9テーブル（<code>001_schema.sql</code> ＋ <code>002_mwl_orders.sql</code>）を自動構築。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Apache 2.4 ＋ PHP 8</strong></td>
+                        <td>本番用 <code>server_config.json</code>（<code>D:/E:/F:/G:/H:</code>・Port 21・Port 104 設定）を適用し、Windowsサービス <code>Apache2.4</code> を自動起動登録。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>ファイアウォール開放</strong></td>
+                        <td><code>TCP 80/443</code>（Web）、<code>TCP 21 &amp; 60000-60099</code>（内視鏡FTP）、<code>TCP 104</code>（DICOM Storage + MWL + MPPS）、<code>TCP 1001</code>（フクダ心電図）の受信規則を自動登録。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>常駐サービス ＆ BCPジョブ</strong></td>
+                        <td>
+                            タスクスケジューラに以下4つの SYSTEM 自動タスクを登録（Windowsにログインしていなくても電源ONだけで自動稼働）：
+                            <ul style="margin:4px 0 0 18px;">
+                                <li><code>RSNext_Ingest_MWL_Service</code>：FTP受信・DICOM Storage/MWL/MPPS・心電図監視・MALL3 CSV監視の統合デーモン</li>
+                                <li><code>RSNext_Mirror_Active_E_to_G</code>：1時間おき <code>E:\rsnext_active ➔ G:\rsnext_active</code> 高速ミラー</li>
+                                <li><code>RSNext_Mirror_Archive_D_to_F</code>：毎日 01:30 <code>D:\rsnext_archive ➔ F:\rsnext_archive</code> ミラー</li>
+                                <li><code>RSNext_Nightly_HDD_Backup</code>：毎日 23:00 <code>H:\rsnext_backup</code> へのDBダンプ（30世代）＋データ退避</li>
+                            </ul>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Step 5 -->
+    <section class="card" id="sec-step5">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>✅</span><span>Step 5：疎通確認・フクダ心電図LAN受信ソフト導入・事前データ移行の開始</span></div>
+            <span class="badge badge-green">仕上げ・並行検証フェーズ</span>
+        </div>
+
+        <div class="grid-2">
+            <div class="sub-card">
+                <h4>1. Web画面・待受ポートの確認</h4>
+                <p>院内PCまたはリモートデスクトップのブラウザから以下を開いて表示を確認します：</p>
+                <ul style="margin:6px 0 10px 18px; line-height:1.7;">
+                    <li>メイン検査一覧：<code>http://192.168.1.163/rsnext/</code></li>
+                    <li>撮影依頼・DICOM MWL管理：<code>http://192.168.1.163/rsnext/worklist.php</code></li>
+                    <li>Modality Studio：<code>http://192.168.1.163/rsnext/modality_studio.php</code></li>
+                </ul>
+                <p style="margin:0; font-size:0.9rem; color:#475569;">PowerShellで待受ポート（<code>80, 21, 104, 5432</code>）を確認するワンライナー：</p>
+                <pre style="background:#1e293b; color:#e2e8f0; padding:10px; border-radius:6px; font-size:0.85rem; margin-top:6px;"><code>Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 80,21,104,5432 | Select-Object LocalPort,OwningProcess</code></pre>
+            </div>
+
+            <div class="sub-card">
+                <h4>2. フクダ電子 心電計LAN接続ソフトの導入（任意タイミング）</h4>
+                <p>
+                    心電計（FCP-8300 / FCP-8321）からの TCP 1001 波形受信を行うため、旧サーバ共有内にある純正インストーラを実行します：
+                </p>
+                <ul style="margin:6px 0 0 18px; line-height:1.7;">
+                    <li>場所：<code>\\192.168.1.164\D\Users\rsn\public_html\FukudaOnline64\フクダ電子 検査装置ＬＡＮ接続処理 (RS-Base専用).msi</code></li>
+                    <li>出力先フォルダ設定：<strong><code>C:\FUKUDA_ECG</code></strong>（配下の <code>ORG</code> フォルダに出力された <code>.ECG</code> を RS-Next が自動検知・ハフマン復号して即時登録します）</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="sub-card" style="margin-top:16px; background:#f0fdf4; border-color:#86efac;">
+            <h4>3. 現行 RS-Base（192.168.1.164）からの無停止バックグラウンド事前移行（Phase 1）</h4>
+            <p style="margin-bottom:8px;">
+                新サーバ（<code>192.168.1.163</code>）の構築完了後、診療を一切止めずに現行サーバ（<code>192.168.1.164</code>：完全 Read-Only 参照）から 17.9万患者＋19.3万検査（約3.17TB）を <code>D:\rsnext_archive</code>（〜2021年）と <code>E:\rsnext_active</code>（2022年〜）へ自動振り分けコピーできます。中断・再開も自在（冪等）です。
+            </p>
+            <pre style="background:#0f172a; color:#f8fafc; padding:14px; border-radius:8px; overflow-x:auto; margin:0;"><code># まずは直近100検査だけテスト移行してWeb表示を確認する場合:
+C:\Python313\python.exe "C:\Apache24\htdocs\rsnext\migration\migrate_from_rsbase.py" --limit 100 --thumbs
+
+# 全件バックグラウンド移行を開始する場合（いつでも Ctrl+C で中断・再実行で続きから再開可能）:
+C:\Python313\python.exe "C:\Apache24\htdocs\rsnext\migration\migrate_from_rsbase.py" --thumbs</code></pre>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 医用画像ファイリングシステム — ⑦ Windows Server 2025 実機構築・ソフトウェア非RAID化手順書
+    </footer>
+
+</div>
+</body>
+</html>
+

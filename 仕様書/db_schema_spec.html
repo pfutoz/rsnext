@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>② 完全UTF-8 データベース設計書（PostgreSQL 18） | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html" class="active">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ②</span>
+            <span class="badge badge-glass">PostgreSQL 16 / 18+</span>
+            <span class="badge badge-glass">完全 UTF-8 正規化スキーマ</span>
+            <span class="badge badge-glass">pg_trgm 高速検索</span>
+        </div>
+        <h1>🗄️ ② 完全UTF-8 データベース設計書（<code>rsnext_db</code> 全7テーブル定義）</h1>
+        <p>
+            旧 <code>gazouDB</code>（PostgreSQL 9.3 / <code>SHIFT_JIS</code>）における文字コード変換負荷、数値/文字列型不一致による結合インデックス無効化、重複送信登録、無言エラー放置をすべて解決する <code>sql/001_schema.sql</code> の詳細テーブル定義書です。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 テーブル一覧:</strong>
+        <a href="#sec-er">ER関係図・一覧</a>
+        <a href="#tbl-patients">1. patients</a>
+        <a href="#tbl-profiles">2. modality_profiles</a>
+        <a href="#tbl-discovered">3. discovered_devices</a>
+        <a href="#tbl-studies">4. studies</a>
+        <a href="#tbl-files">5. study_files</a>
+        <a href="#tbl-quarantine">6. quarantine_queue</a>
+        <a href="#tbl-logs">7. ingest_logs</a>
+    </div>
+
+    <!-- ER概要 -->
+    <section class="card" id="sec-er">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📐</span><span>データベース全体構成・リレーション概要</span></div>
+            <span class="status-done">sql/001_schema.sql 実装済</span>
+        </div>
+
+        <pre><code>[patients] (1) ──────────&lt; (N) [studies] (1) ──────────&lt; (N) [study_files]
+  patient_id (PK)                study_id (PK)                 file_id (PK)
+  patient_no_int (GENERATED)     legacy_renban (UNIQUE)        sop_instance_uid (UNIQUE部分索引)
+  kanja_kanji (GIN trgm)         patient_id (FK, CASCADE)      sha256_hash (INDEX)
+  kanja_yomi_norm (GIN trgm)     profile_id (FK)
+                                 volume_id + rel_path (UNIQUE)
+                                       ▲
+                                       │
+[modality_profiles] (1) ───────────────┴────── (0..N) [discovered_devices]
+  profile_id (PK)                                       discovery_id (PK)
+  match_rules (JSONB)                                   fingerprint_key (UNIQUE)
+  viewer_options (JSONB)                                linked_profile_id (FK)
+
+[quarantine_queue] (隔離救済時に studies.study_id へリンク)     [ingest_logs] (全着信・編集・救済の監査証跡)</code></pre>
+
+        <div class="alert alert-teal">
+            <div class="alert-title">🔑 設計上の3大重要ポイント</div>
+            <ul style="margin-bottom:0;">
+                <li><strong>患者ID付け替えの一括連鎖整合（<code>ON UPDATE CASCADE</code>）</strong>: <code>studies.patient_id</code> は <code>patients(patient_id)</code> を外部キー参照しており、新患仮ID統合等にも安全に追随します。</li>
+                <li><strong>二重取込の物理的ブロック</strong>: <code>study_files</code> に <code>sop_instance_uid</code> の部分ユニークインデックスと <code>sha256_hash</code> インデックスを備え、モダリティからの再送操作でもファイルが重複増殖しません。</li>
+                <li><strong>誤削除からの100%復元（Soft Delete）</strong>: 検査削除は物理消去ではなく <code>studies.is_deleted = TRUE</code> とし、通常検索の部分インデックス（<code>WHERE NOT is_deleted</code>）から即座に除外しつつゴミ箱から1クリック復元可能です。</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- 1. patients -->
+    <section class="card" id="tbl-patients">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>👤</span><span>1. <code>patients</code> — 患者マスタテーブル</span></div>
+            <span class="badge badge-blue">旧 name_tbl 継承・強化</span>
+        </div>
+        <p>MALL3 の <code>DRS\kanja.txt</code> および <code>DRS2\kanja.txt</code>（21列CSV）からリアルタイム <code>UPSERT</code> される患者基本テーブルです。画像がCSVより先に着信した緊急新患時も仮レコードを自動生成し、後続CSV到着時に正式氏名へ上書き補完します。</p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:20%;">カラム名</th><th style="width:20%;">データ型</th><th style="width:16%;">制約・索引</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>patient_id</code></td><td><code>VARCHAR(32)</code></td><td><strong>PK</strong></td><td>正規化患者ID（先頭ゼロ除去済。<code>DRS2</code> 系は <code>9xxxxx</code>）。</td></tr>
+                    <tr><td><code>patient_no_int</code></td><td><code>BIGINT</code></td><td><code>GENERATED STORED</code><br><code>idx_patients_no_int</code></td><td>純数字IDの自動数値化列。数値順ソート・範囲検索を高速化。</td></tr>
+                    <tr><td><code>kanja_kanji</code></td><td><code>TEXT</code></td><td>NOT NULL / GIN <code>pg_trgm</code></td><td>患者漢字氏名（中間一致・部分一致ミリ秒検索対応）。</td></tr>
+                    <tr><td><code>kanja_yomi</code></td><td><code>TEXT</code></td><td>NOT NULL</td><td>MALL3 原本フリガナ文字列。</td></tr>
+                    <tr><td><code>kanja_yomi_norm</code></td><td><code>TEXT</code></td><td>NOT NULL / GIN <code>pg_trgm</code></td><td>NFKC正規化＋ひらがな➔全角カタカナ変換＋空白除去済の検索専用カナ列。</td></tr>
+                    <tr><td><code>birth_date</code> / <code>birth_raw</code></td><td><code>DATE</code> / <code>VARCHAR(32)</code></td><td>NULL許容 / DEFAULT ''</td><td>生年月日（年齢自動算出用）および和暦・元データ文字列控え。</td></tr>
+                    <tr><td><code>sex</code></td><td><code>VARCHAR(16)</code></td><td>NOT NULL</td><td>性別（<code>男</code> / <code>女</code> 等）。</td></tr>
+                    <tr><td><code>postal_code</code> / <code>address</code></td><td><code>VARCHAR(20)</code> / <code>TEXT</code></td><td>NOT NULL</td><td>郵便番号・住所。</td></tr>
+                    <tr><td><code>phone1</code> / <code>phone2</code></td><td><code>VARCHAR(64)</code></td><td>NOT NULL</td><td>自宅電話番号・携帯電話番号。</td></tr>
+                    <tr><td><code>death_or_job</code></td><td><code>VARCHAR(100)</code></td><td>NOT NULL</td><td>MALL3 CSV 第10列（転帰・職業欄互換保持）。</td></tr>
+                    <tr><td><code>insurance_info</code></td><td><code>JSONB</code></td><td>DEFAULT <code>'{}'</code></td><td>MALL3 CSV 第11〜20列の主保険・公費1〜5情報を構造化格納。</td></tr>
+                    <tr><td><code>source_channel</code></td><td><code>VARCHAR(24)</code></td><td>DEFAULT <code>'DRS'</code></td><td>登録経路（<code>DRS</code> / <code>DRS2</code> / <code>DICOM_AUTO</code> / <code>MIGRATION</code> / <code>MANUAL</code>）。</td></tr>
+                    <tr><td><code>created_at</code> / <code>updated_at</code></td><td><code>TIMESTAMPTZ</code></td><td>DEFAULT <code>NOW()</code></td><td>初回作成日時・最終更新日時。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. modality_profiles -->
+    <section class="card" id="tbl-profiles">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🎛️</span><span>2. <code>modality_profiles</code> — Modality Studio 装置プロファイル管理</span></div>
+            <span class="badge badge-purple">Modality Studio コア</span>
+        </div>
+        <p>院内各モダリティの識別条件（<code>match_rules</code>）、検査名決定ロジック、UIバッジデザイン、ビューワ個別挙動をノーコード管理するマスタテーブルです。現行5種7台＋汎用外部メディアの計7プロファイルが初期プリセットされます。</p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:20%;">カラム名</th><th style="width:18%;">データ型</th><th style="width:16%;">制約・既定値</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>profile_id</code></td><td><code>SERIAL</code></td><td><strong>PK</strong></td><td>プロファイル内部ID。</td></tr>
+                    <tr><td><code>profile_code</code></td><td><code>VARCHAR(64)</code></td><td>UNIQUE NOT NULL</td><td>識別コード（例: <code>FUJI_ENDO_EP8000</code>, <code>OLYMPUS_ENDO_FHD</code>, <code>SHIMADZU_DX_XRAY</code>）。</td></tr>
+                    <tr><td><code>device_name</code></td><td><code>VARCHAR(128)</code></td><td>NOT NULL</td><td>管理画面表示用の装置名称（例: <code>フジフイルム内視鏡 ELUXEO 8000</code>）。</td></tr>
+                    <tr><td><code>room_or_location</code></td><td><code>VARCHAR(64)</code></td><td>DEFAULT ''</td><td>設置検査室（例: <code>内視鏡室 (2台共通FTP)</code>, <code>レントゲン室</code>）。</td></tr>
+                    <tr><td><code>protocol</code></td><td><code>VARCHAR(32)</code></td><td>DEFAULT <code>'DICOM_SCP'</code></td><td>受信プロトコル（<code>FTP</code> / <code>DICOM_SCP</code> / <code>FOLDER_WATCH</code> / <code>HTTP_API</code>）。</td></tr>
+                    <tr><td><code>modality_code</code></td><td><code>VARCHAR(16)</code></td><td>DEFAULT <code>'OT'</code></td><td>標準モダリティコード（<code>ES</code>, <code>DX</code>, <code>RF</code>, <code>US</code>, <code>ECG</code>, <code>DOC</code>, <code>OT</code>）。</td></tr>
+                    <tr><td><code>display_category</code></td><td><code>VARCHAR(32)</code></td><td>DEFAULT <code>'other'</code></td><td>UIフィルタ分類（<code>endoscopy</code>, <code>xray</code>, <code>us</code>, <code>ecg</code>, <code>report</code>, <code>other</code>）。</td></tr>
+                    <tr><td><code>default_kensamei</code></td><td><code>VARCHAR(100)</code></td><td>NOT NULL</td><td>既定の検査名（例: <code>ES_General</code>, <code>内視鏡(D)</code>, <code>胸部(D)</code>, <code>心電図(D)</code>）。</td></tr>
+                    <tr><td><code>kensamei_from_tag</code></td><td><code>VARCHAR(64)</code></td><td>DEFAULT <code>'FIXED'</code></td><td>検査名決定方式: <code>FIXED</code>（固定名）/ <code>BODY_OR_PROTOCOL</code>（部位・プロトコル自動判定）/ <code>MODALITY_PROTOCOL</code>（Modality接頭辞＋プロトコル名）。</td></tr>
+                    <tr><td><code>icon_emoji</code> / <code>badge_color</code></td><td><code>VARCHAR(16)</code></td><td><code>'🏥'</code> / <code>'#2563eb'</code></td><td>検査一覧バッジのアイコン絵文字とテーマカラーHEX値。</td></tr>
+                    <tr><td><code>priority_order</code></td><td><code>INTEGER</code></td><td>DEFAULT <code>100</code></td><td>評価優先順位（昇順評価。数値が小さい専用ルールから先に判定し、汎用 <code>999</code> が最後）。</td></tr>
+                    <tr><td><code>is_enabled</code> / <code>unit_count</code></td><td><code>BOOLEAN</code> / <code>INTEGER</code></td><td><code>TRUE</code> / <code>1</code></td><td>有効フラグおよび接続台数メモ。</td></tr>
+                    <tr><td><code>match_rules</code></td><td><code>JSONB</code></td><td>DEFAULT <code>'{}'</code></td><td>自動判定条件（<code>source_ip</code>, <code>calling_ae_title</code>, <code>station_name</code>, <code>manufacturer_contains</code>, <code>model_contains</code>, <code>dicom_modality</code>, <code>min_width</code>, <code>max_width</code>, <code>file_ext</code>, <code>watch_subfolder</code>）。</td></tr>
+                    <tr><td><code>viewer_options</code></td><td><code>JSONB</code></td><td>DEFAULT <code>'{}'</code></td><td>ビューワ・印刷連動設定（例: <code>{"olympus_circle_fit": true, "default_wl": null, "default_ww": null}</code>）。</td></tr>
+                    <tr><td><code>last_received_at</code> / <code>total_received</code></td><td><code>TIMESTAMPTZ</code> / <code>BIGINT</code></td><td>NULL / <code>0</code></td><td>最終着信日時および累積受信検査数（稼働死活監視に利用）。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 3. discovered_devices -->
+    <section class="card" id="tbl-discovered">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📡</span><span>3. <code>discovered_devices</code> — 自動検出レーダー（未登録装置指紋記録）</span></div>
+            <span class="badge badge-purple">Plug &amp; Play 登録用</span>
+        </div>
+        <p>通信が着信するたびに「プロトコル・送信元IP・AEタイトル・StationName・メーカー・機種名・Modality・拡張子」から一意な <code>fingerprint_key</code> を生成して自動記録します。まだ専用プロファイル（<code>linked_profile_id</code>）に紐付いていない新装置は Modality Studio 画面上部に「✨ 新しい装置を検知しました」としてポップアップ表示され、1クリックでプロファイル登録できます。</p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:22%;">カラム名</th><th style="width:18%;">データ型</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>discovery_id</code></td><td><code>SERIAL PK</code></td><td>検出レコードID。</td></tr>
+                    <tr><td><code>fingerprint_key</code></td><td><code>VARCHAR(255) UNIQUE</code></td><td>装置指紋複合キー（同一装置からの2回目以降は <code>seen_count</code> 加算・<code>last_seen_at</code> 更新）。</td></tr>
+                    <tr><td><code>source_protocol</code> / <code>source_ip</code></td><td><code>VARCHAR(32)</code> / <code>(64)</code></td><td>着信プロトコル（<code>FTP</code>, <code>DICOM_SCP</code> 等）および送信元IPv4アドレス。</td></tr>
+                    <tr><td><code>calling_ae_title</code> / <code>station_name</code></td><td><code>VARCHAR(64)</code> / <code>(128)</code></td><td>DICOM Calling AE Title および <code>(0008,1010) StationName</code>。</td></tr>
+                    <tr><td><code>manufacturer</code> / <code>model_name</code></td><td><code>VARCHAR(128)</code></td><td><code>(0008,0070) Manufacturer</code> および <code>(0008,1090) ManufacturerModelName</code>。</td></tr>
+                    <tr><td><code>dicom_modality</code> / <code>sample_resolution</code> / <code>sample_file_ext</code></td><td><code>VARCHAR</code></td><td>DICOM Modality、検出された画像解像度（例: <code>1920x1080</code>）、ファイル拡張子。</td></tr>
+                    <tr><td><code>linked_profile_id</code> / <code>is_dismissed</code></td><td><code>INTEGER FK</code> / <code>BOOLEAN</code></td><td>紐付け済プロファイルID（未登録時は <code>NULL</code>）および通知非表示フラグ。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 4. studies -->
+    <section class="card" id="tbl-studies">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📋</span><span>4. <code>studies</code> — 検査（Study）テーブル</span></div>
+            <span class="badge badge-blue">旧 gazou_tbl 継承・強化</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:22%;">カラム名</th><th style="width:18%;">データ型</th><th style="width:18%;">制約・索引</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>study_id</code></td><td><code>BIGSERIAL</code></td><td><strong>PK</strong></td><td>RS-Next 検査一意ID。</td></tr>
+                    <tr><td><code>legacy_renban</code></td><td><code>INTEGER</code></td><td><code>UNIQUE</code> (NULL許容)</td><td>旧RS-Base <code>gazou_tbl.renban</code> を完全保持（過去データの連番参照・冪等移行用）。</td></tr>
+                    <tr><td><code>patient_id</code></td><td><code>VARCHAR(32)</code></td><td>FK ➔ <code>patients</code><br><code>idx_studies_patient</code></td><td>患者ID。誤ID付け替え時はこの列と <code>study_meta.json</code> をトランザクション更新。</td></tr>
+                    <tr><td><code>profile_id</code></td><td><code>INTEGER</code></td><td>FK ➔ <code>modality_profiles</code></td><td>着信時にマッチした装置プロファイルID。</td></tr>
+                    <tr><td><code>study_date</code> / <code>study_time</code></td><td><code>DATE</code> / <code>TIME</code></td><td>NOT NULL / NULL許容<br><code>idx_studies_date_desc</code></td><td>検査日・検査時刻。一覧の高速日付降順検索用複合インデックスを付与。</td></tr>
+                    <tr><td><code>modality</code> / <code>kensamei</code></td><td><code>VARCHAR(16)</code> / <code>(100)</code></td><td>NOT NULL</td><td>モダリティコード（<code>ES</code>, <code>DX</code> 等）および表示検査名（<code>ES_General</code>, <code>胸部(D)</code> 等）。</td></tr>
+                    <tr><td><code>display_category</code> / <code>badge_color</code></td><td><code>VARCHAR(32)</code> / <code>(16)</code></td><td>NOT NULL</td><td>一覧タブ分類およびバッジ色キャッシュ。</td></tr>
+                    <tr><td><code>station_name</code> / <code>manufacturer</code> / <code>model_name</code></td><td><code>VARCHAR</code></td><td>DEFAULT ''</td><td>撮影装置メタデータ控え。</td></tr>
+                    <tr><td><code>doctor</code> / <code>department</code></td><td><code>VARCHAR(128)</code> / <code>(64)</code></td><td>DEFAULT ''</td><td>施行医・診療科。</td></tr>
+                    <tr><td><code>findings</code> / <code>comment</code></td><td><code>TEXT</code></td><td>DEFAULT ''</td><td>診断所見（旧 <code>sindan1〜4</code> 統合）および検査メモ。</td></tr>
+                    <tr><td><code>volume_id</code></td><td><code>VARCHAR(32)</code></td><td>DEFAULT <code>'VOL_ACTIVE'</code></td><td>格納先論理ボリュームID（<code>VOL_ARCHIVE</code> または <code>VOL_ACTIVE</code>）。</td></tr>
+                    <tr><td><code>rel_path</code></td><td><code>TEXT</code></td><td><strong>UNIQUE NOT NULL</strong></td><td>ボリュームルートからの相対パス（例: <code>studies/2026/11/17/P00070755_ES_091522_01</code>）。</td></tr>
+                    <tr><td><code>file_count</code> / <code>total_bytes</code></td><td><code>INTEGER</code> / <code>BIGINT</code></td><td>DEFAULT 0</td><td>格納ファイル数・合計バイト数。</td></tr>
+                    <tr><td><code>primary_file_type</code></td><td><code>VARCHAR(16)</code></td><td>DEFAULT <code>'DICOM'</code></td><td>主ファイル種別（<code>DICOM</code> / <code>ECG</code> / <code>IMAGE</code> / <code>PDF</code>）。クリック時の起動ビューワ切替に使用。</td></tr>
+                    <tr><td><code>study_instance_uid</code></td><td><code>VARCHAR(128)</code></td><td><code>idx_studies_uid</code></td><td>DICOM <code>StudyInstanceUID</code>（同一検査の連続受信ファイルを同一フォルダへ集約するキー）。</td></tr>
+                    <tr><td><code>is_deleted</code> / <code>deleted_at</code></td><td><code>BOOLEAN</code> / <code>TIMESTAMPTZ</code></td><td>DEFAULT <code>FALSE</code></td><td>ゴミ箱（論理削除）フラグおよび削除日時。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 5. study_files / 6. quarantine_queue / 7. ingest_logs -->
+    <section class="card" id="tbl-files">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📄</span><span>5. <code>study_files</code> — 個別ファイル管理 ＆ 重複防止テーブル</span></div>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:22%;">カラム名</th><th style="width:18%;">データ型</th><th style="width:20%;">制約・索引</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>file_id</code></td><td><code>BIGSERIAL</code></td><td><strong>PK</strong></td><td>個別ファイルID。</td></tr>
+                    <tr><td><code>study_id</code></td><td><code>BIGINT</code></td><td>FK ➔ <code>studies</code> (CASCADE)</td><td>親検査ID。</td></tr>
+                    <tr><td><code>seq_no</code> / <code>filename</code></td><td><code>INTEGER</code> / <code>VARCHAR(128)</code></td><td><code>UNIQUE(study_id, filename)</code></td><td>検査内連番（1, 2, ...）および正規化ファイル名（<code>0001.dcm</code> 等）。</td></tr>
+                    <tr><td><code>orig_filename</code> / <code>file_kind</code></td><td><code>VARCHAR(255)</code> / <code>(16)</code></td><td>NOT NULL</td><td>着信時の元ファイル名および種別（<code>DICOM</code> / <code>ECG</code> / <code>IMAGE</code> / <code>PDF</code>）。</td></tr>
+                    <tr><td><code>sop_instance_uid</code></td><td><code>VARCHAR(128)</code></td><td>部分 <code>UNIQUE</code> 索引</td><td>DICOM <code>SOPInstanceUID</code>。同一UIDの再送をDB制約レベルで確実に重複排除。</td></tr>
+                    <tr><td><code>sha256_hash</code></td><td><code>CHAR(64)</code></td><td><code>idx_study_files_sha256</code></td><td>ファイル全体のSHA-256ハッシュ値（非DICOMファイルの重複防止＆改ざん・破損ベリファイ用）。</td></tr>
+                    <tr><td><code>file_bytes</code> / <code>width</code> / <code>height</code> / <code>transfer_syntax</code></td><td>数値 / <code>VARCHAR</code></td><td>—</td><td>ファイルサイズ、画像ピクセル寸法、DICOM Transfer Syntax UID。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="card" id="tbl-quarantine">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🛡️</span><span>6. <code>quarantine_queue</code>（未紐付け隔離キュー）＆ 7. <code>ingest_logs</code>（監査ログ）</span></div>
+        </div>
+
+        <div class="sub-title">6. <code>quarantine_queue</code> — ID未入力・バーコード誤読データの保護・救済管理</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:24%;">カラム名</th><th style="width:18%;">データ型</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>quarantine_id</code> / <code>received_at</code></td><td><code>BIGSERIAL PK</code> / <code>TIMESTAMPTZ</code></td><td>隔離IDおよび受信日時。</td></tr>
+                    <tr><td><code>source_protocol</code> / <code>source_ip</code></td><td><code>VARCHAR(32)</code> / <code>(64)</code></td><td>着信経路（<code>FTP</code>, <code>DICOM_SCP</code>, <code>FOLDER_WATCH</code> 等）と送信元IP。</td></tr>
+                    <tr><td><code>raw_patient_id</code> / <code>raw_patient_name</code></td><td><code>VARCHAR(128)</code> / <code>TEXT</code></td><td>ヘッダに入っていた生ID（例: <code>""</code>, <code>"$17077..."</code>, <code>"NoNumber"</code>）と患者名タグ控え。</td></tr>
+                    <tr><td><code>study_date_raw</code> / <code>modality</code> / <code>kensamei_guess</code></td><td><code>VARCHAR</code></td><td>検査日文字列、モダリティ、推定検査名（画面での判別支援用）。</td></tr>
+                    <tr><td><code>quarantine_rel</code> / <code>file_count</code> / <code>reason</code></td><td><code>TEXT UNIQUE</code> / <code>INT</code> / <code>TEXT</code></td><td><code>quarantine/</code> 配下の相対パス、保護ファイル枚数、隔離理由メッセージ。</td></tr>
+                    <tr><td><code>status</code></td><td><code>VARCHAR(16)</code></td><td><code>PENDING</code>（未解決：一覧ヘッダー警告対象）/ <code>RESOLVED</code>（患者紐付け完了）/ <code>DISCARDED</code>（テスト撮影破棄）。</td></tr>
+                    <tr><td><code>resolved_patient_id</code> / <code>resolved_study_id</code> / <code>resolved_at</code></td><td><code>VARCHAR</code> / <code>BIGINT FK</code> / <code>TIMESTAMPTZ</code></td><td>救済先患者ID、生成された <code>studies.study_id</code>、救済実行日時。</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="sub-title" id="tbl-logs">7. <code>ingest_logs</code> — 着信・メタデータ編集・救済アクション監査ログ</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:24%;">カラム名</th><th style="width:18%;">データ型</th><th>説明</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>log_id</code> / <code>logged_at</code></td><td><code>BIGSERIAL PK</code> / <code>TIMESTAMPTZ</code></td><td>監査ログIDおよび記録タイムスタンプ（<code>idx_ingest_logs_recent</code> 降順索引）。</td></tr>
+                    <tr><td><code>level</code> / <code>channel</code> / <code>event_type</code></td><td><code>VARCHAR(16)</code> / <code>(32)</code> / <code>(32)</code></td><td>ログレベル（<code>INFO</code>, <code>WARN</code>, <code>ERROR</code>）、経路（<code>FTP</code>, <code>DICOM_SCP</code>, <code>ECG</code>, <code>MALL3</code>, <code>WEB_EDIT</code>）、イベント種別（<code>STUDY_FILED</code>, <code>PATIENT_REASSIGNED</code>, <code>QUARANTINE_IN</code> 等）。</td></tr>
+                    <tr><td><code>patient_id</code> / <code>study_id</code></td><td><code>VARCHAR(32)</code> / <code>BIGINT</code></td><td>対象患者ID・対象検査ID。</td></tr>
+                    <tr><td><code>summary</code> / <code>detail</code></td><td><code>TEXT</code> / <code>JSONB</code></td><td>人間可読サマリー文、および変更前後値（例: 旧患者ID➔新患者ID、端末IP等）のJSONB詳細。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ② 完全UTF-8 データベース設計書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+

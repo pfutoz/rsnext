@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>③ Modality Studio ＆ 自動取込エンジン仕様書 | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html" class="active">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ③</span>
+            <span class="badge badge-glass">Modality Studio (Plug &amp; Play)</span>
+            <span class="badge badge-glass">リアルタイム 1〜2秒取込</span>
+            <span class="badge badge-glass">Quarantine 自動保護</span>
+        </div>
+        <h1>🎛️ ③ Modality Studio ＆ モダリティ自動取込エンジン仕様書</h1>
+        <p>
+            将来のモダリティ増設・機器更新をブラウザ上から直感的かつおしゃれに完結させる「Modality Studio」の4大機能と、当院5種7台の医療機器＋MALL3患者マスタをリアルタイム処理する Python Ingest Service 群のアルゴリズムを定義します。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 目次:</strong>
+        <a href="#sec-studio">1. Modality Studio 4大機能</a>
+        <a href="#sec-presets">2. 初期搭載7プロファイル定義</a>
+        <a href="#sec-pid">3. 患者ID正規化・誤読検知ロジック</a>
+        <a href="#sec-receivers">4. プロトコル別レシーバ仕様 (FTP/DICOM/ECG/CSV)</a>
+        <a href="#sec-render">5. 先行キャッシュ (DICOM / 心電図ハフマン復号)</a>
+    </div>
+
+    <!-- 1. Modality Studio 4大機能 -->
+    <section class="card" id="sec-studio">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🎛️</span><span>1. Modality Studio（モダリティ設定スタジオ）UI・機能仕様</span></div>
+            <span class="badge badge-purple">ノーコード・再起動不要</span>
+        </div>
+        <p>
+            従来のように新しい医療機器を入れるたびスクリプトの正規表現や設定ファイルを書き換える運用を廃止し、<code>modality_studio.php</code> 上の洗練されたカードUIから誰でも安全に装置追加・ルール調整を行える設計とします。DB（<code>modality_profiles</code>）を毎着信時に高速参照するため、<strong>設定変更は保存した瞬間（0秒）から常駐サービスの再起動なしで即時反映</strong>されます。
+        </p>
+
+        <div class="grid-2">
+            <div class="sub-card" style="background:#f5f3ff; border-color:#ddd6fe;">
+                <h4>📡 ① 新規装置の自動検出レーダー（Plug &amp; Play）</h4>
+                <p style="margin:0;">
+                    未登録の新しい装置からテスト画像が1枚でも送信されると、<code>common.py</code> の <code>match_modality_profile()</code> が送信元IP・Calling AE Title・StationName・メーカー・型番・解像度を <code>discovered_devices</code> に自動記録。画面上部に<strong>「✨ 新しい装置からの着信を検知しました」</strong>カードが出現し、<strong>［1クリックで装置登録］</strong>を押すだけでマッチ条件が自動入力されたプロファイルが完成します。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#eff6ff; border-color:#bfdbfe;">
+                <h4>📄 ② 業者向け「接続設定案内シート」ワンクリック印刷</h4>
+                <p style="margin:0;">
+                    医療機器メーカーの設置エンジニアに渡すだけで接続作業が完了するA4案内シートを自動生成・印刷します。<br>
+                    ・<strong>DICOM送信設定</strong>: IP <code>192.168.1.164</code> / Port <code>104</code> / AE Title: <code>任意（自動受理）</code><br>
+                    ・<strong>FTP送信設定</strong>: IP・Port <code>21</code>・アカウント情報<br>
+                    ・<strong>フォルダ出力・HTTP API仕様</strong> も1枚に美しく整形出力。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#f0fdfa; border-color:#99f6e4;">
+                <h4>🧪 ③ ドラッグ＆ドロップ振分シミュレータ</h4>
+                <p style="margin:0;">
+                    手元のサンプルファイル（<code>.dcm</code>, <code>.ECG</code>, <code>.jpg</code>, <code>.pdf</code>）をModality Studio画面へドロップすると、本番DBを汚さずにドライラン解析を実行。「優先度 <code>#20 OLYMPUS_ENDO_FHD</code> にマッチ ➔ 検査名 <code>内視鏡(D)</code> / バッジ色 <code>#0d9488</code> / O社サークルフィット <code>ON</code> で登録されます」と視覚的にプレビュー表示します。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#f0fdf4; border-color:#86efac;">
+                <h4>🌐 ④ 将来フォーマットの間口拡大（DICOM以外も標準対応）</h4>
+                <p style="margin:0;">
+                    DICOM・フクダ心電図だけでなく、今後クリニックで増えやすい以下のデータ形式を標準サポートします：<br>
+                    ・<strong>PDF検査レポート</strong>（骨密度測定・ABI脈波・ホルタ心電図解析書・睡眠時無呼吸レポート等）<br>
+                    ・<strong>汎用画像（JPEG / PNG / WebP）</strong>（iPad・デジカメによる肛門科・皮膚創部撮影や紹介状スキャン）<br>
+                    ・<strong>HTTP REST マルチパートAPI</strong>（タブレットや院内他システムからの直接POST登録）
+                </p>
+            </div>
+        </div>
+
+        <div class="sub-title">検査名自動決定ストラテジー（<code>kensamei_from_tag</code>）仕様</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:24%;">ストラテジー値</th><th>変換ロジック（<code>ingest_service/common.py</code> 実装準拠）</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>FIXED</code></td>
+                        <td>常にプロファイルの <code>default_kensamei</code> を採用（例: フジ内視鏡 ➔ <code>ES_General</code>、オリンパス ➔ <code>内視鏡(D)</code>、心電計 ➔ <code>心電図(D)</code>）。</td>
+                    </tr>
+                    <tr>
+                        <td><code>BODY_OR_PROTOCOL</code></td>
+                        <td><code>DX</code>/<code>CR</code> でタグ（BodyPart / ProtocolName / StudyDescription）に <code>CHEST</code>・<code>胸</code> を含めば <code>胸部(D)</code>、<code>ABD</code>・<code>腹</code> を含めば <code>腹部(D)</code> に自動正規化。それ以外は <code>StudyDescription ➔ ProtocolName ➔ BodyPart ➔ default_kensamei</code> の優先順で採用。</td>
+                    </tr>
+                    <tr>
+                        <td><code>MODALITY_PROTOCOL</code></td>
+                        <td>装置側のプロトコル名を活かしつつ接頭辞を統一（例: エコー <code>Adult Abd</code> ➔ <code>US_Adult_Abd_</code>、透視 <code>腰椎 RF</code> ➔ <code>RF_腰椎_RF</code>）。旧RS-Baseの検査名表記と100%互換を維持します。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. 初期プリセット7種 -->
+    <section class="card" id="sec-presets">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🏥</span><span>2. 当院初期プリセット・モダリティプロファイル一覧（全7種）</span></div>
+            <span class="status-done">001_schema.sql シード済</span>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>優先度</th>
+                        <th>プロファイルコード / 装置名</th>
+                        <th>経路 / 台数</th>
+                        <th>マッチ条件 (<code>match_rules</code>)</th>
+                        <th>決定検査名 / 特記オプション</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>10</strong></td>
+                        <td>🔬 <code>FUJI_ENDO_EP8000</code><br>フジフイルム内視鏡 ELUXEO 8000</td>
+                        <td><code>FTP</code> / 2台</td>
+                        <td><code>Modality=ES</code>, <code>Manufacturer∋FUJIFILM</code>, <code>Model∋EP-8000</code></td>
+                        <td>固定: <code>ES_General</code>（1280×1024 JPEG DICOM）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>20</strong></td>
+                        <td>⭕ <code>OLYMPUS_ENDO_FHD</code><br>オリンパス内視鏡システム</td>
+                        <td><code>FTP</code> / 1台</td>
+                        <td><code>Modality=ES</code>, <code>min_width=1800</code> (1920×1080 Full HD)</td>
+                        <td>固定: <code>内視鏡(D)</code><br><code>olympus_circle_fit: true</code>（印刷時自動O社フィット）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>30</strong></td>
+                        <td>🩻 <code>SHIMADZU_DX_XRAY</code><br>島津製作所 レントゲン撮影 (CR/DX)</td>
+                        <td><code>DICOM_SCP</code> / 1台</td>
+                        <td><code>Modality∈{DX,CR}</code>, <code>StationName=SHIMADZU-PC</code></td>
+                        <td>部位判定: <code>胸部(D)</code> / <code>腹部(D)</code> 等（16bit MONOCHROME2）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>35</strong></td>
+                        <td>⚡ <code>SHIMADZU_RF_FLUORO</code><br>島津製作所 X線TV・透視装置 (RF)</td>
+                        <td><code>DICOM_SCP</code> / 1台</td>
+                        <td><code>Modality=RF</code>, <code>StationName=SHIMADZU-PC</code></td>
+                        <td>プロトコル連動: <code>RF_腰椎_RF</code> 等</td>
+                    </tr>
+                    <tr>
+                        <td><strong>40</strong></td>
+                        <td>🔊 <code>CANON_ARIETTA_US</code><br>超音波診断装置 (ARIETTA 65)</td>
+                        <td><code>DICOM_SCP</code> / 1台</td>
+                        <td><code>Modality=US</code></td>
+                        <td>プロトコル連動: <code>US_Adult_Abd_</code> / <code>US_Carotid_</code> 等</td>
+                    </tr>
+                    <tr>
+                        <td><strong>50</strong></td>
+                        <td>📈 <code>FUKUDA_ECG_12LEAD</code><br>フクダ電子 12誘導心電計</td>
+                        <td><code>FOLDER_WATCH</code> / 2台</td>
+                        <td><code>file_ext∈{ecg,001}</code>, <code>watch_subfolder=fukuda_ecg</code></td>
+                        <td>固定: <code>心電図(D)</code>（12誘導JSONキャッシュ自動生成）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>999</strong></td>
+                        <td>💿 <code>GENERIC_EXTERNAL_MEDIA</code><br>他院紹介CD / カメラ / PDFレポート</td>
+                        <td><code>HTTP_API</code> / 汎用</td>
+                        <td><code>{}</code>（上記いずれにも該当しない全データの受け皿）</td>
+                        <td>部位/記述連動（既定: <code>外部取込画像</code>）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 3. 患者ID正規化 -->
+    <section class="card" id="sec-pid">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔢</span><span>3. 患者ID正規化・旧互換・バーコード誤読検知ルール（<code>normalize_patient_id</code>）</span></div>
+            <span class="status-done">common.py 実装済</span>
+        </div>
+        <ol>
+            <li><strong>Unicode NFKC正規化・前後空白除去</strong>: 全角数字で手入力されたID（例: <code>７０７５５</code>）も自動で半角 <code>70755</code> に正規化します。</li>
+            <li><strong>旧RS-Base 12桁 <code>999999</code> プレフィックス互換</strong>: <code>999999070755</code> のような12桁以上の <code>999999</code> 始まり数字列は下位桁を整数化して <code>70755</code> として抽出します。</li>
+            <li><strong>フクダ心電計 <code>(D)</code> サフィックス抽出</strong>: <code>00083003(D)</code> や <code>83003(D)</code> 形式から数値部 <code>83003</code> を自動抽出し先頭ゼロを除去します。</li>
+            <li><strong>MALL3 <code>DRS2</code> 9番台付与</strong>: <code>DRS2\kanja.txt</code> 由来の場合は <code>f"9{val:05d}"</code>（例: <code>123</code> ➔ <code>900123</code>）へ変換し現行RS-Base採番と100%一致させます。</li>
+            <li><strong>不正ID・バーコード誤読の確実な Quarantine 隔離</strong>: 空欄、<code>NoNumber</code> / <code>Unknown</code> / <code>test</code> / <code>$</code> / <code>~</code> を含む文字列、数値以外、<code>0</code> 以下、または <strong>10桁超過（バーコードリーダーが検体番号等を誤読したケース）</strong> はすべて <code>None</code> と判定し、誤った患者やゴミデータとして混ぜず確実に <code>quarantine_queue</code> へ保護します。</li>
+        </ol>
+    </section>
+
+    <!-- 4. プロトコル別レシーバ仕様 -->
+    <section class="card" id="sec-receivers">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>⚡</span><span>4. プロトコル別 常駐レシーバ・ファイラー動作仕様</span></div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:24%;">コンポーネント</th>
+                        <th>処理フロー・技術仕様</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>① 内蔵FTPレシーバ</strong><br><code>ftp_receiver.py</code></td>
+                        <td>
+                            <code>pyftpdlib</code> ベースの非同期FTPサーバ。<code>FTPHandler.on_file_received(file)</code> コールバックにより、内視鏡からのTCPストリームが完全にクローズされた瞬間にのみファイラーキューへ投入（従来のポーリング方式で起きる「転送途中の半端なDICOMを読んで壊す事故」が原理的にゼロ）。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>② DICOM Storage SCP</strong><br><code>dicom_scp.py</code></td>
+                        <td>
+                            <code>pynetdicom</code> により Verification SOP Class（<code>C-ECHO</code>）と全主要 Storage SOP Class（<code>DX</code>, <code>CR</code>, <code>RF</code>, <code>US</code>, <code>ES</code>, <code>CT</code>, <code>MR</code>, <code>Secondary Capture</code>, <code>Encapsulated PDF</code> 等）を一括受理。<code>ae.require_called_aet = False</code> により相手装置のAEタイトル設定に関わらず無条件で受信完了応答（<code>0x0000 Success</code>）を返します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>③ フクダ心電図ウォッチャ</strong><br><code>fukuda_ecg_watcher.py</code></td>
+                        <td>
+                            <code>watchdog</code> で着信フォルダを監視し、ファイルサイズ安定（書込完了）確認後にファイル名および内部バイナリヘッダから患者ID・検査日時（Block 1 タイムスタンプ）を抽出。原本 <code>0001.ECG</code> を格納すると同時に <code>ecg_render.py</code> で波形JSONを <code>cache/ecg_json/</code> へ先行出力します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>④ MALL3 患者CSVウォッチャ</strong><br><code>mall3_csv_watcher.py</code></td>
+                        <td>
+                            <code>DRS\kanja.txt</code> ＆ <code>DRS2\kanja.txt</code>（CP932エンコード・21列カンマ区切り: <code>[0]ID, [1]カナ, [2]漢字, [3]生年月日, [4]郵便番号, [5]住所, [6]性別, [7]電話1, [8]電話2, [9]転帰/職業, [10..19]保険・公費1〜5</code>）を <code>cp932 (errors='replace')</code> で安全にデコードして <code>patients</code> へ即時 <code>UPSERT</code>。処理済みCSVはタイムスタンプ退避またはクリーンアップして再読込を防止します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>⑤ 統合検査ファイラー</strong><br><code>study_filer.py</code></td>
+                        <td>
+                            着信ファイルを解析し、①<code>SOPInstanceUID</code> / <code>SHA-256</code> 重複チェック ➔ ②患者ID正規化（NGなら <code>quarantine/</code> へ隔離）➔ ③未登録患者なら <code>patients</code> に仮枠自動作成 ➔ ④同一患者・同一 <code>StudyInstanceUID</code>（または同一日・同一モダリティの連続セッション）を検索して既存検査フォルダへ連番追記、または新規 <code>P{ID}_{MOD}_{HHMMSS}_{SEQ}</code> フォルダを作成 ➔ ⑤<code>study_meta.json</code> 更新＆先行サムネイル生成を実行します。
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 5. 先行レンダラ仕様 -->
+    <section class="card" id="sec-render">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🖼️</span><span>5. 画像・心電図レンダリングエンジン仕様（<code>dcm_render.py</code> / <code>ecg_render.py</code>）</span></div>
+            <span class="status-done">実装・検証済</span>
+        </div>
+
+        <div class="grid-2">
+            <div class="sub-card">
+                <h4>🩻 DICOM 適正階調レンダラ (<code>dcm_render.py</code>)</h4>
+                <ul style="margin-bottom:0;">
+                    <li><strong>カラー画像（内視鏡・エコー RGB / YBR）</strong>: 3ch RGB uint8配列として忠実出力。</li>
+                    <li><strong>10/12/16bit グレースケール（島津X線 DX/RF・CT/MRI）</strong>: <code>pydicom.apply_voi_lut()</code> で装置推奨の Window Center / Width を適用し、未定義時は <code>RescaleSlope / RescaleIntercept</code> 補正後に最小〜最大ダイナミックレンジ正規化を実施。</li>
+                    <li><strong>MONOCHROME1 自動反転</strong>: <code>PhotometricInterpretation == 'MONOCHROME1'</code> を自動検知して白黒階調を標準 <code>MONOCHROME2</code> へ揃えます。</li>
+                </ul>
+            </div>
+            <div class="sub-card">
+                <h4>📈 フクダ電子 12誘導心電図デコーダ (<code>ecg_render.py</code>)</h4>
+                <ul style="margin-bottom:0;">
+                    <li><strong>バイナリ構造解析</strong>: オフセット <code>0x1E</code> のブロックディレクトリを走査し、Block 1 から機種名（<code>FCP-*</code>）・検査日時、Block 3（Tag <code>0x04</code>）から計測値（<strong>HR, RR, PR, QRS, QT, QTcB, QTcF, Axis電気軸</strong>）を抽出。</li>
+                    <li><strong>固定ハフマン＋2階差分復号</strong>: Block 5（マーカー <code>00 09 02</code>）の圧縮ビットストリームを専用 <code>HUFF_TREE</code> で復号し、<code>x = 2*prev1 - prev2 + delta</code> で8基本誘導（I, II, V1〜V6）を完全復元。</li>
+                    <li><strong>標準12誘導導出</strong>: アイントーベン・ゴールドバーガー則により III, aVR, aVL, aVF をmV単位で算出して高精細JSON出力します。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ③ Modality Studio ＆ 自動取込エンジン仕様書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⑥ モダリティ別 撮影依頼・患者属性受け渡し ＆ DICOM MWL 仕様書 | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP</a>
+            <a href="mwl_order_spec.html" class="active">⑥ 撮影依頼・DICOM MWL</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ⑥（追加拡張）</span>
+            <span class="badge badge-glass">DICOM MWL (C-FIND) ＆ MPPS 標準搭載</span>
+            <span class="badge badge-glass">IHE-J 日本語 JIS ISO 2022 IR 87 準拠</span>
+            <span class="badge badge-glass">全5種7台 実機型番別 連携設計</span>
+        </div>
+        <h1>📋 ⑥ モダリティ別 撮影依頼・患者データ受け渡し ＆ DICOM MWL 仕様書</h1>
+        <p>
+            診察室・電子カルテから院内5種7台の各検査機器へ「撮影オーダー」および「正確な患者属性（ID・漢字氏名・カナ・生年月日・性別）」を受け渡し、手入力ミスやバーコード誤読（<code>~NoNumber.dcm</code> / <code>$17077...</code>）を根絶するためのモダリティ別最適方式と DICOM MWL / MPPS 実装仕様を定義します。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 目次:</strong>
+        <a href="#sec-matrix">1. 当院5種7台 モダリティ別の受け渡し検討・結論</a>
+        <a href="#sec-routes">2. 統合4ルート連携アーキテクチャ</a>
+        <a href="#sec-mwl-spec">3. DICOM MWL / MPPS ＆ 日本語文字コード仕様</a>
+        <a href="#sec-emr">4. 電子カルテ (MALL3 / karteview) 連携仕様</a>
+        <a href="#sec-db-api">5. テーブル定義・API・検証シミュレータ</a>
+    </div>
+
+    <!-- 1. モダリティ別検討マトリクス -->
+    <section class="card" id="sec-matrix">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔍</span><span>1. 当院モダリティ全5種（7台）別の患者データ・撮影依頼受け渡し方式の徹底検討</span></div>
+            <span class="badge badge-green">実機DICOM・ECGヘッダ＆取説解析済</span>
+        </div>
+
+        <p>
+            現行サーバ（<code>192.168.1.164</code>）の実データ解析により、院内7台の正確なコンソール・レコーダー・心電計型番と通信ソフト仕様がすべて判明しています。同じ「モダリティ連携」でも機器の世代やメーカーオプション有無によって最適な渡し方が異なるため、<strong>DICOM MWL を中核にしつつ、ライセンス未開放機や非DICOM心電計も100%カバーするハイブリッド構成</strong>を採用します。
+        </p>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:19%;">モダリティ（実機構成）</th>
+                        <th style="width:15%;">DICOM MWL 対応性</th>
+                        <th style="width:34%;">推奨する第1方式（本命）と装置側設定</th>
+                        <th style="width:32%;">第2方式（オプション未開放時・併用策）</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>
+                            <strong>① 島津 レントゲン・透視</strong><br>
+                            <code>Canon CXDI Controller RF</code><br>
+                            (<code>Station: SHIMADZU-PC</code> / 1台)
+                        </td>
+                        <td><span class="status-done">◎ 標準対応</span><br><small>MWL (C-FIND)<br>＋ MPPS 対応</small></td>
+                        <td>
+                            <strong>【DICOM MWL ＋ 撮影プロトコル自動連動】</strong><br>
+                            <code>CXDI Control Software</code> は標準でMWL取得・MPPS進捗通知に対応。すでに Port 104 で C-STORE 接続済みのため、CXDIのMWM設定に <code>192.168.1.164 : 104</code>（AE任意）を登録するだけで、患者属性＋依頼部位（<code>胸部-PA</code> / <code>腹部-AP</code> / <code>腰椎 RF</code>）をワンクリック取得可能。
+                        </td>
+                        <td>
+                            万一 CXDI 側の MWM ライセンスが無効な場合も、<code>worklist.php</code> の<strong>画面バーコード読取</strong>および <strong>CSV Outbox 出力（<code>orders_today_cp932.csv</code>）</strong>で連携可能。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>② 超音波エコー</strong><br>
+                            <code>FUJIFILM Healthcare</code><br>
+                            <code>ARIETTA 65</code><br>
+                            (<code>Station: AR1</code> / 1台)
+                        </td>
+                        <td><span class="status-done">◎ 標準対応</span><br><small>MWL (C-FIND)<br>＋ MPPS 対応</small></td>
+                        <td>
+                            <strong>【DICOM MWL 直接取得（ID照会フォールバック付）】</strong><br>
+                            公式 Conformance Statement にて MWL SCU / MPPS SCU 対応確認済。すでに DICOM Storage オプションが稼働中のため、<code>ARIETTA 65</code> の DICOM Worklist 設定へ <code>192.168.1.164 : 104</code> を追加するだけで「Worklist」ボタンから当日腹部・頸動脈エコー予定患者を即呼び出し可能。
+                        </td>
+                        <td>
+                            緊急エコー（事前オーダー未発行）時も、エコー画面で患者IDだけ入力して Worklist 検索を押せば<strong>「スマートID照会フォールバック」</strong>により18万件の患者マスタから漢字・カナ・生年月日・性別が自動セットされます。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>③ フジ内視鏡 ×2台</strong><br>
+                            <code>ELUXEO 8000 (EP-8000)</code><br>
+                            ＋ ティアック <code>MV-3C</code><br>
+                            (<code>Station: MV3C</code>)
+                        </td>
+                        <td><span class="status-dev">○ 構成次第で対応</span><br><small>MV-3C (DICOM版)<br>または EP-8000<br>(要 DL-4450)</small></td>
+                        <td>
+                            <strong>【TEAC MV-3C（または EP-8000）からの DICOM MWL 取得】</strong><br>
+                            当院の内視鏡DICOMを生成しているティアック製レコーダー <code>MV-3C</code>（<code>MV-3CS-D</code> 等）は MWM（MWL）機能を搭載。MV-3C 側のワークリスト先を <code>192.168.1.164 : 104</code> に設定すれば、内視鏡室タッチパネルから本日の検査リストを選択できます。
+                        </td>
+                        <td>
+                            <strong>【画面Code39バーコード ＋ 着信時「胃がん検診」自動振分】</strong><br>
+                            現行FTP運用のままでも、処置/内視鏡室PCの <code>worklist.php</code> バーコードをスキャンして撮影すれば、着信時に事前オーダー（<code>上部内視鏡</code> vs <code>胃がん検診</code>）と自動突合し、従来手作業だった <code>胃がん検診</code> 分類まで全自動化されます。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>④ オリンパス内視鏡 ×1台</strong><br>
+                            オリンパス本体<br>
+                            ＋ ティアック <code>MV-3C</code><br>
+                            (<code>1920×1080</code> / <code>MV3C</code>)
+                        </td>
+                        <td><span class="status-dev">○ MV-3C経由対応</span><br><small>高額な純正部門<br>システム不要</small></td>
+                        <td>
+                            <strong>【後段 TEAC MV-3C の DICOM MWL 機能を活用】</strong><br>
+                            オリンパス本体単体では高額な純正ゲートウェイ（Solemio等）を要求されることが多いですが、当院ではすでに後段に <strong>TEAC <code>MV-3C</code></strong> が入っているため、フジ側と同様に MV-3C の MWM 機能で RS-Next から直接患者リストを取得可能です。
+                        </td>
+                        <td>
+                            MV-3C が FTP 専用設定の場合も、内視鏡室ボードの <strong>高コントラスト Code39 バーコード読取 ＋ 着信時オーダ自動突合</strong> により手入力ミスゼロで運用可能です。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <strong>⑤ フクダ電子 心電計 ×2台</strong><br>
+                            実機型番特定済:<br>
+                            <code>FCP-8300</code> ＆ <code>FCP-8321</code><br>
+                            ＋ <code>検査装置LAN接続処理</code>
+                        </td>
+                        <td><span class="badge badge-amber">△ 単体MWL非搭載</span><br><small>現行LAN接続処理は<br>TCP1001受信専用</small></td>
+                        <td>
+                            <strong>【処置室ボード「液晶画面直読み Code39 バーコード」＋ 着信時自動消し込み】</strong><br>
+                            現行の <code>検査装置LAN接続処理 (RS-Base専用)</code> は取扱説明書通り「心電計➔PCへの片方向受信専用」です。そのため追加費用ゼロで最も確実な方法として、処置室PC/タブレットの <code>worklist.php</code> に表示される<strong>心電図待ちリストの特大 Code39 バーコード</strong>を心電計のバーコードリーダーでピッと読み取って測定します（手打ちゼロ・誤読ゼロ）。測定完了後、<code>.ECG</code> が届いた瞬間に自動でオーダー完了＆依頼医紐付けが行われます。
+                        </td>
+                        <td>
+                            将来フクダ電子の上位連携ソフト（CVS / DICOMゲートウェイ等）を導入された際にも即直結できるよう、RS-Next 側は <strong><code>Modality=ECG</code> の DICOM MWL 応答</strong> と <strong><code>fukuda_ecg_orders_cp932.csv</code> 自動出力</strong> の両方を標準稼働させています。
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. 統合4ルートアーキテクチャ -->
+    <section class="card" id="sec-routes">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔄</span><span>2. 1回のオーダー発行で全4ルートへ同時展開するクローズドループ設計</span></div>
+        </div>
+
+        <div class="arch-diagram">
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#1e3a8a;">① 診察室・受付（オーダー発生）</div>
+                <div class="arch-item"><strong>電子カルテ URL 1クリック連携</strong><code>worklist.php?patient_id={ID}</code> で対象患者を即セット</div>
+                <div class="arch-item"><strong>複数検査 まとめ発注</strong>例：「胸部XP ＋ 心電図 ＋ 腹部エコー」を同時選択して1秒発行</div>
+                <div class="arch-item"><strong>MALL3 直近受付患者ピル</strong><code>DRS\kanja.txt</code> 着信患者が自動で先頭候補に表示</div>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#6d28d9;">② RS-Next Worklist &amp; MWL Hub</div>
+                <div class="arch-item"><strong>ルートA: DICOM MWL SCP (Port 104)</strong><code>C-FIND</code> で漢字・カナ・ローマ字氏名＋部位コードを配信</div>
+                <div class="arch-item"><strong>ルートB: スマートID照会フォールバック</strong>オーダー未発行でも装置でID検索すれば18万名マスタから即応答</div>
+                <div class="arch-item"><strong>ルートC: 検査室ボード＆画面Code39</strong>心電計等のスキャナで画面から直接ピッとID読取（指示票印刷可）</div>
+                <div class="arch-item"><strong>ルートD: 共有 CSV Outbox 出力</strong><code>orders_today_cp932.csv</code> を常時最新化</div>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#0f766e;">③ 撮影実施・自動消し込み還流</div>
+                <div class="arch-item"><strong>MPPS リアルタイム進捗連動</strong><code>N-CREATE</code> で「🔵 撮影中」、<code>N-SET</code> で「🟢 完了」へ自動遷移</div>
+                <div class="arch-item"><strong>画像・心電図着信による自動突合</strong>FTP内視鏡や心電図もファイル到着と同時にオーダー完了消し込み</div>
+                <div class="arch-item"><strong>依頼種別・依頼医の自動継承</strong>同じフジ内視鏡でもオーダーに応じて <code>ES_General</code> と <code>胃がん検診</code> を自動振分！</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. DICOM MWL / MPPS 技術詳細 -->
+    <section class="card" id="sec-mwl-spec">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📡</span><span>3. DICOM MWL (`C-FIND`) / MPPS ＆ 日本語文字コード仕様（IHE-J 準拠）</span></div>
+            <span class="status-done">ingest_service/mwl_scp.py 実装済</span>
+        </div>
+
+        <div class="alert alert-info">
+            <div class="alert-title">💡 国産モダリティで文字化けを起こさない「JIS 3コンポーネント PersonName ＋ 異体字安全変換」</div>
+            国内のX線（Canon CXDI / 島津）・エコー（ARIETTA 65）・内視鏡レコーダー（TEAC MV-3C）は、DICOM規格の日本語拡張である <strong><code>SpecificCharacterSet = \ISO 2022 IR 87</code>（JIS X 0208）</strong> と <strong>3グループ表記（<code>ローマ字=漢字=カナ</code>）</strong> を標準としています。<br>
+            RS-Next の <code>mwl_scp.py</code> はフリガナからヘボン式ローマ字を自動生成し、さらに <code>髙</code>➔<code>高</code>、<code>﨑</code>➔<code>崎</code> 等のJIS第1・第2水準外異体字を安全に正規化して <code>YAMADA^TARO=山田^太郎=ヤマダ^タロウ</code> 形式で返却するため、文字化けやエンコード例外が一切発生しません（装置ごとに <code>UTF-8</code> や <code>ASCII_ROMAJI</code> への切替も可能）。
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:18%;">DICOM タグ</th>
+                        <th style="width:10%;">VR</th>
+                        <th style="width:28%;">属性名</th>
+                        <th>RS-Next MWL SCP 返却内容・照合挙動</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>(0008,0005)</code></td><td>CS</td><td>SpecificCharacterSet</td><td>既定 <code>\ISO 2022 IR 87</code>（プロファイル設定により <code>ISO_IR 192</code> [UTF-8] / <code>ISO_IR 100</code> も選択可）</td></tr>
+                    <tr><td><code>(0008,0050)</code></td><td>SH</td><td>AccessionNumber</td><td>自動採番オーダー番号（例: <code>RS261117000001</code>、最大16文字厳守）。着信画像からの逆突合主キー。</td></tr>
+                    <tr><td><code>(0010,0010)</code></td><td>PN</td><td>PatientName</td><td>3グループ形式: <code>YAMADA^TARO=山田^太郎=ヤマダ^タロウ</code>（どのコンソールでも漢字・カナ・英字の最適表示が可能）</td></tr>
+                    <tr><td><code>(0010,0020)</code></td><td>LO</td><td>PatientID</td><td>正規化患者ID（例: <code>70755</code>）。前方/部分ワイルドカード検索および単一ID照会フォールバックに対応。</td></tr>
+                    <tr><td><code>(0010,0030)</code></td><td>DA</td><td>PatientBirthDate</td><td><code>YYYYMMDD</code>（例: <code>19620415</code>）</td></tr>
+                    <tr><td><code>(0010,0040)</code> / <code>1010</code></td><td>CS / AS</td><td>PatientSex / PatientAge</td><td><code>M</code> / <code>F</code> / <code>O</code> および検査日時点の3桁年齢（例: <code>064Y</code>）</td></tr>
+                    <tr><td><code>(0020,000D)</code></td><td>UI</td><td>StudyInstanceUID</td><td>DICOM PS3.5 B.2 準拠 <code>2.25.&lt;128bit整数&gt;</code> を事前発行。撮影画像にそのまま埋め込まれ確実に同一検査へ紐付きます。</td></tr>
+                    <tr><td><code>(0032,1060)</code></td><td>LO</td><td>RequestedProcedureDescription</td><td>依頼手技名称（例: <code>胸部正面 PA</code>, <code>胃がん検診 上部内視鏡</code>, <code>腹部超音波検査</code>）</td></tr>
+                    <tr><td><code>(0040,0100)</code><br><code>>(0008,0060)</code></td><td>SQ<br>CS</td><td>ScheduledProcedureStepSequence<br>Modality</td><td><code>ES</code>, <code>DX</code>（<code>CR</code> 照会とも相互マッチ）, <code>RF</code>, <code>US</code>, <code>ECG</code></td></tr>
+                    <tr><td><code>>(0040,0001..0003)</code></td><td>AE/DA/TM</td><td>StationAET / StartDate / StartTime</td><td>予定AEタイトル（空欄時は全装置共通公開）、予定日（範囲検索 <code>YYYYMMDD-YYYYMMDD</code> 対応）、予定時刻</td></tr>
+                    <tr><td><code>>(0040,0007..0008)</code></td><td>LO / SQ</td><td>StepDescription / ProtocolCodeSeq</td><td>CXDI 等の撮影プロトコル自動選択に連動する <code>CodeValue</code>（<code>胸部-PA</code>, <code>腰椎 RF</code> 等）を格納</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 4. 電子カルテ連携 -->
+    <section class="card" id="sec-emr">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔗</span><span>4. 電子カルテ（<code>karteview.php</code> / MALL3）からのワンクリック呼び出し仕様</span></div>
+        </div>
+        <p>
+            現在 <code>192.168.1.16</code> で稼働している電子カルテビューワ（<code>karteview.php</code>）にリンクボタンを1つ追加するだけで、現在開いている患者のIDを引き継いだ状態で撮影依頼画面を瞬時に開けます。
+        </p>
+        <pre><code>&lt;!-- 電子カルテ画面内のリンク設置例 --&gt;
+&lt;a href="http://192.168.1.164/rsnext/worklist.php?patient_id=70755" target="_blank"&gt;
+  📋 RS-Next 撮影・検査依頼
+&lt;/a&gt;</code></pre>
+    </section>
+
+    <!-- 5. DB・API一覧 -->
+    <section class="card" id="sec-db-api">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🧩</span><span>5. 実装モジュール・DBテーブル構成</span></div>
+            <span class="status-done">全機能実装・E2E検証済</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width:30%;">ファイル / テーブル</th><th>役割</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>sql/002_mwl_orders.sql</code></td><td><code>modality_orders</code>（撮影依頼ワークリスト表）、<code>order_presets</code>（10種検査プリセット表）、および <code>modality_profiles.mwl_config</code> 定義。</td></tr>
+                    <tr><td><code>ingest_service/mwl_scp.py</code></td><td>DICOM MWL <code>EVT_C_FIND</code> ハンドラ、スマートID照会フォールバック、MPPS <code>N-CREATE</code>/<code>N-SET</code> ハンドラ、カナ➔ローマ字＆JIS異体字安全変換、CSV Outbox 自動出力、実機 <code>C-FIND</code> テストクライアント。</td></tr>
+                    <tr><td><code>ingest_service/dicom_scp.py</code><br><code>ingest_service/study_filer.py</code></td><td>単一ポート（本番 <code>104</code> / 検証 <code>11104</code>）での Storage + Verification + MWL + MPPS 統合待受、および画像・心電図着信時のオーダー自動突合・検査名継承・完了消し込み。</td></tr>
+                    <tr><td><code>worklist.php</code> / <code>worklist_api.php</code></td><td>ワンクリック複数検査同時依頼UI、検査室別リアルタイム待ちボード、純SVG高コントラスト <code>Code39</code> 画面バーコード＆指示票印刷、ブラウザ内蔵 <code>C-FIND</code> パケット疎通テスター。</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ⑥ モダリティ別 撮影依頼・患者属性受け渡し ＆ DICOM MWL 仕様書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+

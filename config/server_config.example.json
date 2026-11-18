@@ -1,0 +1,184 @@
+{
+    "system_name": "RS-Next 医用画像ファイリングシステム",
+    "version": "1.0.0",
+    "clinic_name": "おの肛門科胃腸科内視鏡クリニック",
+    "karte_url_template": "http://192.168.1.16/karteview/karteview.php?patient_no={patient_id}&source=new&do_search=1",
+    "enable_legacy_local_viewer": false,
+    "jpeg_direct_export_default_dir": "C:\\Users\\Owner\\Desktop\\jpeg",
+    "db": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "dbname": "rsnext_db",
+        "user": "postgres",
+        "password": "CHANGE_ME"
+    },
+    "storage": {
+        "active_volume_id": "VOL_ACTIVE",
+        "archive_cutoff_year": 2021,
+        "volumes": {
+            "VOL_ARCHIVE": {
+                "label": "過去アーカイブ領域 (本番: D: 4TB SSD #1)",
+                "path": "C:/Apache24/htdocs/rsnext/storage_data/vol_archive",
+                "smb_share": "\\\\192.168.1.111\\rsnext_archive",
+                "mirror_path": "C:/Apache24/htdocs/rsnext/storage_data/mirror_archive_f"
+            },
+            "VOL_ACTIVE": {
+                "label": "現役データ領域 (本番: E: 4TB SSD #2)",
+                "path": "C:/Apache24/htdocs/rsnext/storage_data/vol_active",
+                "smb_share": "\\\\192.168.1.111\\rsnext_active",
+                "mirror_path": "C:/Apache24/htdocs/rsnext/storage_data/mirror_active_g"
+            }
+        },
+        "cache_root": "C:/Apache24/htdocs/rsnext/storage_data/cache",
+        "inbox_root": "C:/Apache24/htdocs/rsnext/storage_data/inbox",
+        "quarantine_root": "C:/Apache24/htdocs/rsnext/storage_data/quarantine",
+        "backup_hdd_root": "C:/Apache24/htdocs/rsnext/storage_data/backup_hdd_8tb"
+    },
+    "ingest": {
+        "ftp": {
+            "enabled": true,
+            "bind_host": "0.0.0.0",
+            "port": 2121,
+            "production_port_note": "Windows Server 2025 本番では 21 に設定",
+            "username": "esuser",
+            "password": "esuser",
+            "allow_anonymous": true,
+            "banner": "220 ES Server (RS-Next Compatible)"
+        },
+        "dicom_scp": {
+            "enabled": true,
+            "bind_host": "0.0.0.0",
+            "port": 11104,
+            "production_port_note": "Windows Server 2025 本番では 104 に設定 (C-STORE / C-ECHO / MWL C-FIND / MPPS 統合待受・任意のAEタイトル自動受理)",
+            "promiscuous_ae_title": true,
+            "mwl_enabled": true,
+            "mpps_enabled": true,
+            "mwl_default_charset": "ISO_2022_IR_87",
+            "mwl_id_lookup_fallback": true,
+            "orders_outbox_dir": "C:/Apache24/htdocs/rsnext/storage_data/outbox/orders"
+        },
+        "fukuda_ecg": {
+            "enabled": true,
+            "watch_subdir": "fukuda_ecg",
+            "production_watch_note": "Windows Server 2025 本番では C:/FUKUDA_ECG/ORG を指定"
+        },
+        "mall3_csv": {
+            "enabled": true,
+            "drs_subdir": "drs",
+            "drs2_subdir": "drs2",
+            "drs2_prefix_nine": true,
+            "production_watch_note": "Windows Server 2025 本番では C:/DRS および C:/DRS2 を共有・指定"
+        },
+        "mall3_sql": {
+            "enabled": true,
+            "poll_interval_sec": 60,
+            "note": "MALL3 SQL Server 患者マスタ 自動増分巡回 (カルテサーバ別に秒数・開始/停止カスタム可・完全 Read-Only NOLOCK)",
+            "sources": [
+                {
+                    "code": "MALL3_NEW",
+                    "label": "新カルテ (192.168.1.77 / 本院現行)",
+                    "enabled": true,
+                    "host": "192.168.1.77",
+                    "port": 1433,
+                    "dbname": "his00",
+                    "user": "sa",
+                    "password": "CHANGE_ME",
+                    "prefix_nine": false,
+                    "poll_interval_sec": 60
+                },
+                {
+                    "code": "MALL3_ONO",
+                    "label": "おのカルテ (192.168.1.52 / 9番台付与)",
+                    "enabled": true,
+                    "host": "192.168.1.52",
+                    "port": 1433,
+                    "dbname": "his00",
+                    "user": "sa",
+                    "password": "CHANGE_ME",
+                    "prefix_nine": true,
+                    "poll_interval_sec": 60
+                }
+            ]
+        },
+        "nihon_kohden_ecg": {
+            "enabled": true,
+            "watch_subdir": "nihon_kohden_ecg",
+            "production_watch_note": "日本光電 心電計出力先 (MFER .mwf / ConvName_Online .nkc / PDF / JPG) 監視 ＋ FTP (CEX/CEX) 対応"
+        }
+    },
+    "legacy_rsbase_source": {
+        "pg_host": "192.168.1.164",
+        "pg_port": 5432,
+        "pg_dbname": "gazouDB",
+        "pg_user": "postgres",
+        "pg_password": "CHANGE_ME",
+        "share_public_html": "\\\\192.168.1.164\\D\\Users\\rsn\\public_html"
+    },
+    "shared_watcher_hub": {
+        "enabled": true,
+        "smb_tmp_dir": "\\\\192.168.1.16\\htdocs\\rsbase\\tmp",
+        "http_base": "http://192.168.1.16/rsbase"
+    },
+    "ops_monitor": {
+        "snmp_agent": {
+            "enabled": true,
+            "bind_host": "0.0.0.0",
+            "port": 161,
+            "community": "public"
+        },
+        "custom_targets": [
+            {
+                "id": "ECG_KOMON_33",
+                "name": "肛門科 心電計 (FCP-8300 / 有線)",
+                "host": "192.168.1.33",
+                "role": "医療機器 (12誘導心電計・無線未使用)",
+                "tcp_port": 0,
+                "snmp": false,
+                "snmp_port": 161,
+                "community": "public"
+            },
+            {
+                "id": "ECG_ICHO_34",
+                "name": "胃腸科 心電計 (FCP-8321)",
+                "host": "192.168.1.34",
+                "role": "医療機器 (12誘導心電計)",
+                "tcp_port": 0,
+                "snmp": false,
+                "snmp_port": 161,
+                "community": "public"
+            }
+        ]
+    },
+    "backup_manager": {
+        "master_enabled": true,
+        "jobs": [
+            {
+                "code": "MIRROR_ACTIVE",
+                "enabled": true,
+                "schedule_type": "interval",
+                "interval_min": 60
+            },
+            {
+                "code": "MIRROR_ARCHIVE",
+                "enabled": true,
+                "schedule_type": "daily",
+                "daily_time": "01:30"
+            },
+            {
+                "code": "DB_DUMP_HDD",
+                "enabled": true,
+                "schedule_type": "daily",
+                "daily_time": "22:45",
+                "retention_days": 30,
+                "verify_after_dump": true
+            },
+            {
+                "code": "FULL_HDD_SYNC",
+                "enabled": true,
+                "schedule_type": "daily",
+                "daily_time": "23:00",
+                "include_archive_on_hdd": true
+            }
+        ]
+    }
+}

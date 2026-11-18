@@ -1,0 +1,2275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>医療法人小野会 オリジナルビューワー - 医療検査データ閲覧</title>
+    <style>
+        :root {
+            --bg-app: #070b14;
+            --bg-panel: #0f172a;
+            --bg-panel-alt: #1e293b;
+            --bg-card: #131c31;
+            --bg-card-hover: #1e293b;
+            --border: #334155;
+            --border-subtle: #1e293b;
+            --accent: #38bdf8;
+            --accent-strong: #0284c7;
+            --accent-glow: rgba(56, 189, 248, 0.35);
+            --green: #10b981;
+            --amber: #f59e0b;
+            --rose: #f43f5e;
+            --purple: #a855f7;
+            --text-main: #f8fafc;
+            --text-sub: #cbd5e1;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg-app);
+            color: var(--text-main);
+            font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", -apple-system, BlinkMacSystemFont, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ------------------------------------------------------------------
+           トップヘッダー
+        ------------------------------------------------------------------ */
+        .app-header {
+            height: 48px;
+            background: linear-gradient(90deg, #091326 0%, #0f2547 55%, #132f5c 100%);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 14px;
+            gap: 10px;
+            flex-shrink: 0;
+            z-index: 100;
+        }
+
+        .brand-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .brand-badge {
+            background: linear-gradient(135deg, #0c2d6b 0%, #1d4ed8 55%, #0284c7 100%);
+            color: #ffffff;
+            border: 1px solid rgba(251, 191, 36, 0.65);
+            font-weight: 700;
+            font-size: 0.78rem;
+            padding: 4px 11px;
+            border-radius: 6px;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 2px 10px rgba(2, 132, 199, 0.35), inset 0 0 12px rgba(251, 191, 36, 0.14);
+            transition: all 0.15s;
+        }
+        .brand-badge:hover {
+            border-color: #fde68a;
+            box-shadow: 0 3px 14px rgba(56, 189, 248, 0.5), inset 0 0 14px rgba(251, 191, 36, 0.25);
+        }
+        .brand-crest {
+            color: #fcd34d;
+            font-size: 0.82rem;
+        }
+
+        .patient-summary {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            min-width: 0;
+            font-size: 0.85rem;
+        }
+
+        .pat-id-pill {
+            font-family: Consolas, monospace;
+            font-weight: 700;
+            background: rgba(56, 189, 248, 0.16);
+            color: #7dd3fc;
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            padding: 2px 8px;
+            border-radius: 5px;
+            white-space: nowrap;
+        }
+
+        .pat-name-main {
+            font-weight: 700;
+            font-size: 0.96rem;
+            color: #ffffff;
+            white-space: nowrap;
+        }
+
+        .pat-meta-sub {
+            color: #bae6fd;
+            font-size: 0.78rem;
+            white-space: nowrap;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .issuer-tag {
+            font-size: 0.76rem;
+            color: #cbd5e1;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 3px 9px;
+            border-radius: 5px;
+            white-space: nowrap;
+        }
+
+        .hdr-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #f1f5f9;
+            border: 1px solid rgba(255, 255, 255, 0.24);
+            padding: 5px 11px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .hdr-btn:hover {
+            background: var(--accent-strong);
+            border-color: var(--accent);
+            color: #ffffff;
+        }
+
+        /* ------------------------------------------------------------------
+           全体レイアウト
+        ------------------------------------------------------------------ */
+        .app-body {
+            display: flex;
+            width: 100vw;
+            height: calc(100vh - 48px);
+            overflow: hidden;
+        }
+
+        /* 左パネル: 収録検査リスト */
+        .exam-sidebar {
+            width: 300px;
+            min-width: 300px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transition: margin-left 0.2s ease;
+            z-index: 40;
+        }
+        .exam-sidebar.collapsed {
+            margin-left: -300px;
+        }
+
+        .sidebar-top {
+            padding: 10px 12px 8px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .sidebar-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: var(--text-sub);
+        }
+
+        .icon-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 2px 7px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+        }
+        .icon-btn:hover {
+            background: var(--bg-panel-alt);
+            color: #fff;
+        }
+
+        .cat-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .cat-chip {
+            background: #1e293b;
+            color: var(--text-muted);
+            border: 1px solid #334155;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.73rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .cat-chip:hover {
+            color: #fff;
+            border-color: #64748b;
+        }
+        .cat-chip.active {
+            background: var(--accent-strong);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .exam-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .exam-card {
+            background: var(--bg-card);
+            border: 1px solid #26334d;
+            border-left: 4px solid #64748b;
+            border-radius: 8px;
+            padding: 9px 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .exam-card:hover {
+            background: var(--bg-card-hover);
+            border-color: #475569;
+        }
+        .exam-card.active {
+            background: #13284c;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+        .exam-card.cat-endoscopy { border-left-color: #10b981; }
+        .exam-card.cat-us        { border-left-color: #0ea5e9; }
+        .exam-card.cat-xray      { border-left-color: #a855f7; }
+        .exam-card.cat-ecg       { border-left-color: #f43f5e; }
+
+        .exam-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+        }
+
+        .exam-date-txt {
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: #f8fafc;
+            font-family: Consolas, monospace;
+        }
+
+        .mod-badge {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 1px 7px;
+            border-radius: 4px;
+            color: #fff;
+            background: #475569;
+        }
+        .mod-endoscopy { background: #059669; }
+        .mod-us        { background: #0284c7; }
+        .mod-xray      { background: #7e22ce; }
+        .mod-ecg       { background: #e11d48; }
+
+        .exam-card-mid {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-sub);
+        }
+
+        .exam-count-pill {
+            font-size: 0.71rem;
+            color: #93c5fd;
+            background: rgba(37, 99, 235, 0.2);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+
+        .exam-sindan-txt {
+            font-size: 0.74rem;
+            color: #fde68a;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.25);
+            padding: 3px 6px;
+            border-radius: 4px;
+            line-height: 1.35;
+        }
+
+        .compare-send-btn {
+            align-self: flex-end;
+            background: rgba(56, 189, 248, 0.14);
+            color: #7dd3fc;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 4px;
+            padding: 2px 7px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: none;
+        }
+        body.is-compare-mode .compare-send-btn {
+            display: inline-block;
+        }
+        .compare-send-btn:hover {
+            background: var(--accent-strong);
+            color: #fff;
+        }
+
+        .note-banner {
+            margin: 8px;
+            padding: 8px 10px;
+            background: rgba(14, 165, 233, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: #bae6fd;
+            line-height: 1.45;
+        }
+
+        /* サイドバー下部: 医療法人小野会 オリジナルビューワー 署名プレート */
+        .onokai-sidebar-footer {
+            padding: 10px 12px;
+            background: linear-gradient(135deg, #09152b 0%, #11254a 100%);
+            border-top: 1px solid rgba(251, 191, 36, 0.38);
+            cursor: pointer;
+            transition: background 0.15s;
+            flex-shrink: 0;
+        }
+        .onokai-sidebar-footer:hover {
+            background: linear-gradient(135deg, #0d1d3a 0%, #173263 100%);
+        }
+        .onokai-kicker {
+            font-size: 0.63rem;
+            font-weight: 700;
+            letter-spacing: 0.09em;
+            color: #fcd34d;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+        .onokai-main-title {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 0.02em;
+        }
+        .onokai-sub-clinic {
+            font-size: 0.71rem;
+            color: #93c5fd;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ステージ右下: オリジナルビューワー透かしエンブレム */
+        .stage-onokai-mark {
+            position: absolute;
+            bottom: 10px;
+            right: 12px;
+            background: rgba(9, 19, 38, 0.78);
+            border: 1px solid rgba(251, 191, 36, 0.35);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: #e2e8f0;
+            letter-spacing: 0.03em;
+            pointer-events: none;
+            z-index: 19;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .stage-onokai-mark span {
+            color: #fcd34d;
+        }
+
+        /* ------------------------------------------------------------------
+           中央メインエリア
+        ------------------------------------------------------------------ */
+        .viewer-main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            background: #05080f;
+            position: relative;
+        }
+
+        /* ツールバー */
+        .viewer-toolbar {
+            min-height: 42px;
+            background: #0d1424;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 10px;
+            gap: 8px;
+            flex-wrap: wrap;
+            z-index: 30;
+        }
+
+        .tb-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .tb-btn {
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            padding: 4px 9px;
+            border-radius: 5px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.12s;
+            user-select: none;
+        }
+        .tb-btn:hover {
+            background: #334155;
+            color: #ffffff;
+        }
+        .tb-btn.active {
+            background: var(--accent-strong);
+            border-color: var(--accent);
+            color: #ffffff;
+            box-shadow: 0 0 8px rgba(2, 132, 199, 0.4);
+        }
+
+        .tb-sep {
+            width: 1px;
+            height: 20px;
+            background: #334155;
+            margin: 0 3px;
+        }
+
+        .slice-counter {
+            font-family: Consolas, monospace;
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: #7dd3fc;
+            min-width: 64px;
+            text-align: center;
+        }
+
+        /* ワークスペース本体 (ステージ + 右サムネイル) */
+        .stage-row {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 画像ステージ */
+        .image-stage {
+            flex: 1;
+            min-width: 0;
+            position: relative;
+            display: grid;
+            background: #03050a;
+            overflow: hidden;
+            user-select: none;
+        }
+        .image-stage.layout-1 {
+            grid-template-columns: 1fr;
+            grid-template-rows: 1fr;
+        }
+        .image-stage.layout-2 {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr;
+            gap: 2px;
+            background: #1e293b;
+        }
+
+        .viewport-slot {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #03050a;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+        }
+        .viewport-slot.grabbing {
+            cursor: grabbing;
+        }
+        .image-stage.layout-2 .viewport-slot.active-slot {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
+
+        .slot-img-wrap {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: 0 0;
+            will-change: transform;
+        }
+
+        .slot-img {
+            display: block;
+            max-width: none;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .slot-overlay-tag {
+            position: absolute;
+            top: 8px;
+            left: 10px;
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            color: #e2e8f0;
+            padding: 3px 9px;
+            border-radius: 5px;
+            font-size: 0.75rem;
+            pointer-events: none;
+            z-index: 15;
+        }
+
+        /* 左右フローティング矢印 */
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 42px;
+            height: 68px;
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #f8fafc;
+            font-size: 1.25rem;
+            border-radius: 8px;
+            cursor: pointer;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        .nav-arrow:hover {
+            background: rgba(2, 132, 199, 0.85);
+            border-color: var(--accent);
+        }
+        .nav-prev { left: 12px; }
+        .nav-next { right: 12px; }
+
+        /* タイル一覧ギャラリー表示 */
+        .tile-gallery {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            background: #060a12;
+            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+            grid-auto-rows: max-content;
+            gap: 14px;
+            align-content: start;
+        }
+        .tile-card {
+            background: #0f172a;
+            border: 2px solid #26334d;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            flex-direction: column;
+        }
+        .tile-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+        }
+        .tile-img-box {
+            height: 165px;
+            background: #020409;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px;
+        }
+        .tile-img-box img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .tile-caption {
+            padding: 5px 9px;
+            font-size: 0.76rem;
+            color: var(--text-sub);
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid #1e293b;
+            font-family: Consolas, monospace;
+        }
+
+        /* 左下HUD */
+        .stage-hud {
+            position: absolute;
+            bottom: 10px;
+            left: 12px;
+            background: rgba(15, 23, 42, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.74rem;
+            font-family: Consolas, monospace;
+            color: var(--text-muted);
+            display: flex;
+            gap: 12px;
+            pointer-events: none;
+            z-index: 20;
+        }
+        .stage-hud strong { color: #7dd3fc; }
+
+        /* 内視鏡 IEE 病巣強調ドック */
+        .iee-dock {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.93);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
+            padding: 5px 10px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            z-index: 25;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .iee-btn {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            border-radius: 5px;
+            padding: 3px 8px;
+            font-size: 0.73rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .iee-btn:hover { background: #334155; color: #fff; }
+        .iee-btn.active {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+        }
+
+        /* 右サムネイルフィルムストリップ */
+        .thumb-sidebar {
+            width: 175px;
+            min-width: 175px;
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            z-index: 25;
+        }
+        .thumb-sidebar.hidden {
+            display: none;
+        }
+        .thumb-hdr {
+            padding: 7px 10px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .thumb-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+        .thumb-item {
+            height: 112px;
+            min-height: 112px;
+            flex-shrink: 0;
+            background: #030712;
+            border: 2px solid #334155;
+            border-radius: 6px;
+            position: relative;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3px;
+        }
+        .thumb-item:hover { border-color: #64748b; }
+        .thumb-item.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+        .thumb-item img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .thumb-num {
+            position: absolute;
+            bottom: 3px;
+            right: 4px;
+            background: rgba(0, 0, 0, 0.78);
+            color: #f1f5f9;
+            font-size: 0.68rem;
+            font-family: Consolas, monospace;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+
+        /* ------------------------------------------------------------------
+           12誘導心電図ステージ
+        ------------------------------------------------------------------ */
+        .ecg-stage-wrap {
+            display: none;
+            flex: 1;
+            position: relative;
+            background: #0b101d;
+            overflow: hidden;
+            cursor: grab;
+        }
+        .ecg-stage-wrap.grabbing { cursor: grabbing; }
+        .ecg-stage-wrap.caliper-cursor { cursor: crosshair; }
+
+        #ecgCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: 0 0;
+            box-shadow: 0 10px 35px rgba(0, 0, 0, 0.65);
+            background: #ffffff;
+        }
+
+        #caliperTip {
+            position: fixed;
+            display: none;
+            background: rgba(15, 23, 42, 0.96);
+            color: #fff;
+            border: 1px solid #06b6d4;
+            border-radius: 6px;
+            padding: 6px 11px;
+            font-size: 0.78rem;
+            font-family: Consolas, monospace;
+            pointer-events: none;
+            z-index: 200;
+            line-height: 1.4;
+        }
+
+        /* 空状態・モーダル */
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            gap: 10px;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .guide-modal-bg {
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.75);
+            z-index: 500;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .guide-card {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            max-width: 640px;
+            width: 100%;
+            padding: 22px 24px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
+            color: #e2e8f0;
+            line-height: 1.65;
+            font-size: 0.88rem;
+        }
+        .guide-card h2 {
+            font-size: 1.1rem;
+            color: #7dd3fc;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .guide-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 12px 0;
+        }
+        .guide-box {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 0.82rem;
+        }
+        .guide-box strong {
+            color: #38bdf8;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        #toastMsg {
+            position: fixed;
+            bottom: 54px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--accent);
+            color: #fff;
+            padding: 7px 16px;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.2s;
+            z-index: 400;
+        }
+        #toastMsg.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* 印刷用スタイル */
+        .print-only-header { display: none; }
+        @media print {
+            html, body {
+                background: #ffffff !important;
+                color: #000000 !important;
+                overflow: visible !important;
+                height: auto !important;
+            }
+            .app-header, .exam-sidebar, .viewer-toolbar, .thumb-sidebar,
+            .nav-arrow, .stage-hud, .stage-onokai-mark, .iee-dock, #toastMsg, .guide-modal-bg {
+                display: none !important;
+            }
+            .print-only-header {
+                display: block !important;
+                padding: 6mm 8mm 3mm;
+                border-bottom: 1px solid #94a3b8;
+                margin-bottom: 4mm;
+                font-size: 10.5pt;
+                color: #0f172a;
+            }
+            .app-body, .viewer-main, .stage-row {
+                display: block !important;
+                height: auto !important;
+                background: #ffffff !important;
+            }
+            .image-stage {
+                height: 235mm !important;
+                background: #ffffff !important;
+            }
+            .viewport-slot {
+                background: #ffffff !important;
+            }
+            .ecg-stage-wrap {
+                height: auto !important;
+                background: #ffffff !important;
+                overflow: visible !important;
+            }
+            #ecgCanvas {
+                position: static !important;
+                transform: none !important;
+                width: 100% !important;
+                height: auto !important;
+                box-shadow: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="print-only-header" id="printHeader"></div>
+
+    <!-- トップヘッダー -->
+    <header class="app-header">
+        <div class="brand-box">
+            <button type="button" class="hdr-btn" id="btnToggleExamList" title="左側の検査一覧パネルを開閉">☰ 検査一覧</button>
+            <span class="brand-badge" onclick="toggleGuide(true)" title="医療法人小野会 オリジナルビューワー（独自開発・専用ソフト不要）">
+                <span class="brand-crest">✦</span>
+                <span>医療法人小野会 オリジナルビューワー</span>
+            </span>
+            <div class="patient-summary">
+                <span class="pat-id-pill" id="hdrPatId">ID: ----</span>
+                <span class="pat-name-main" id="hdrPatName">患者氏名</span>
+                <span class="pat-meta-sub" id="hdrPatMeta"></span>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="issuer-tag" id="hdrIssuer" style="display:none;"></span>
+            <button type="button" class="hdr-btn" onclick="window.print()" title="現在表示中の検査画像・心電図を印刷">🖨️ 印刷</button>
+            <button type="button" class="hdr-btn" onclick="toggleGuide(true)">❓ ビューワー案内</button>
+        </div>
+    </header>
+
+    <div class="app-body">
+        <!-- 左サイドバー: 検査一覧 -->
+        <aside class="exam-sidebar" id="examSidebar">
+            <div class="sidebar-top">
+                <div class="sidebar-title-row">
+                    <span>📂 収録検査一覧 (<span id="examTotalCount">0</span>件)</span>
+                    <button type="button" class="icon-btn" id="btnSortOrder" title="日付の並び順を切り替え">新しい順 ▼</button>
+                </div>
+                <div class="cat-chips" id="catChips"></div>
+            </div>
+            <div id="cdNoteBox" class="note-banner" style="display:none;"></div>
+            <div class="exam-list" id="examListContainer"></div>
+            <div class="onokai-sidebar-footer" onclick="toggleGuide(true)" title="クリックしてビューワー詳細を表示">
+                <div class="onokai-kicker">
+                    <span>✦ ONOKAI ORIGINAL VIEWER</span>
+                    <span>専用ソフト不要</span>
+                </div>
+                <div class="onokai-main-title">医療法人小野会 オリジナルビューワー</div>
+                <div class="onokai-sub-clinic" id="sidebarClinicSub">おの肛門科胃腸科内視鏡クリニック</div>
+            </div>
+        </aside>
+
+        <!-- メインビューワ -->
+        <main class="viewer-main">
+            <!-- 画像用ツールバー -->
+            <div class="viewer-toolbar" id="imageToolbar">
+                <div class="tb-group">
+                    <button type="button" class="tb-btn" id="btnPrevSlice" title="前の画像 [←キー]">◀ 前へ</button>
+                    <span class="slice-counter" id="sliceLabel">0 / 0</span>
+                    <button type="button" class="tb-btn" id="btnNextSlice" title="次の画像 [→キー]">次へ ▶</button>
+                    <div class="tb-sep"></div>
+                    <button type="button" class="tb-btn active" data-layout="1" onclick="setLayoutMode('1')">🖼️ 1画面</button>
+                    <button type="button" class="tb-btn" data-layout="2" onclick="setLayoutMode('2')" title="2枚の画像を左右に並べて比較（別日の検査も比較可能）">⚖️ 2画面比較</button>
+                    <button type="button" class="tb-btn" data-layout="grid" onclick="setLayoutMode('grid')" title="検査内の全画像をタイル一覧で表示">田 タイル一覧</button>
+                </div>
+
+                <div class="tb-group" id="imageManipTools">
+                    <button type="button" class="tb-btn active" id="btnDragPan" onclick="setDragMode('pan')" title="左ドラッグで画像を移動">✋ 移動</button>
+                    <button type="button" class="tb-btn" id="btnDragWl" onclick="setDragMode('wl')" title="左ドラッグで明るさ・コントラスト調整">🌓 階調調整</button>
+                    <button type="button" class="tb-btn" id="btnWheelMode" onclick="toggleWheelMode()" title="マウスホイール回転時の動作を切り替え">🖱️ ホイール: <span id="wheelModeLabel">コマ送り</span></button>
+                    <div class="tb-sep"></div>
+                    <button type="button" class="tb-btn" onclick="stepZoom(0.85)" title="縮小">➖</button>
+                    <button type="button" class="tb-btn" onclick="fitActiveSlot(false)" title="画面枠にフィット [Fキー]">⏹️ フィット</button>
+                    <button type="button" class="tb-btn" id="btnOlympusFit" onclick="fitActiveSlot(true)" style="display:none;" title="内視鏡の円形観察部を大きく拡大 [Oキー]">⏹️ 内視鏡拡大</button>
+                    <button type="button" class="tb-btn" onclick="stepZoom(1.18)" title="拡大">➕</button>
+                    <button type="button" class="tb-btn" onclick="rotateActiveSlot()" title="90度回転">↻ 回転</button>
+                    <button type="button" class="tb-btn" id="btnInvert" onclick="toggleInvert()" title="白黒反転（レントゲン確認等に便利）">🌓 反転</button>
+                    <button type="button" class="tb-btn" id="btnToggleIeeBar" onclick="toggleIeeBar()" title="色調・構造強調バーの表示切替">🔬 強調</button>
+                    <button type="button" class="tb-btn" onclick="resetActiveSlot()" title="表示位置・明るさをリセット [Rキー]">🔄 リセット</button>
+                    <button type="button" class="tb-btn" id="btnToggleThumbs" onclick="toggleThumbSidebar()" title="右サムネイル一覧の開閉">🎞️ サムネイル</button>
+                </div>
+            </div>
+
+            <!-- 心電図用ツールバー -->
+            <div class="viewer-toolbar" id="ecgToolbar" style="display:none;">
+                <div class="tb-group">
+                    <span style="font-size:0.82rem; font-weight:700; color:#fda4af; padding:0 6px;">📈 12誘導安静時心電図 (25.0mm/s ・ 10mm/mV)</span>
+                    <div class="tb-sep"></div>
+                    <button type="button" class="tb-btn active" id="btnEcgPan" onclick="setEcgMode('pan')">✋ 移動/ズーム</button>
+                    <button type="button" class="tb-btn" id="btnEcgCaliper" onclick="setEcgMode('caliper')" title="ドラッグした2点間の時間(ms/心拍数)と電位(mV)を計測">📏 電子キャリパー計測</button>
+                </div>
+                <div class="tb-group">
+                    <button type="button" class="tb-btn" onclick="fitEcg()">⏹️ 画面フィット</button>
+                    <button type="button" class="tb-btn" onclick="oneToOneEcg()">1:1 原寸</button>
+                    <button type="button" class="tb-btn" onclick="toggleEcgCal()">⚡ 較正: <span id="ecgCalLabel">0.1s</span></button>
+                    <button type="button" class="tb-btn active" id="btnEcgDrift" onclick="toggleEcgDrift()">〰️ ドリフト補正: <span id="ecgDriftLabel">ON</span></button>
+                    <button type="button" class="tb-btn" onclick="cycleEcgLineWidth()">✏️ 線幅: <span id="ecgLwLabel">1.0px</span></button>
+                    <button type="button" class="tb-btn" onclick="resetEcg()">🔄 リセット</button>
+                </div>
+            </div>
+
+            <!-- メインステージ行 -->
+            <div class="stage-row">
+                <!-- ① 画像ビューポート -->
+                <div class="image-stage layout-1" id="imageStage">
+                    <div class="viewport-slot active-slot" id="slot0" data-slot="0" onclick="selectSlot(0)">
+                        <div class="slot-img-wrap" id="wrap0">
+                            <img class="slot-img" id="img0" src="" alt="" draggable="false">
+                        </div>
+                        <div class="slot-overlay-tag" id="tag0">--</div>
+                    </div>
+                    <div class="viewport-slot" id="slot1" data-slot="1" style="display:none;" onclick="selectSlot(1)">
+                        <div class="slot-img-wrap" id="wrap1">
+                            <img class="slot-img" id="img1" src="" alt="" draggable="false">
+                        </div>
+                        <div class="slot-overlay-tag" id="tag1">--</div>
+                    </div>
+
+                    <button type="button" class="nav-arrow nav-prev" id="floatPrev" onclick="stepSlice(-1)" title="前の画像 [←]">◀</button>
+                    <button type="button" class="nav-arrow nav-next" id="floatNext" onclick="stepSlice(1)" title="次の画像 [→]">▶</button>
+
+                    <div class="stage-hud" id="imageHud">
+                        <span>画像: <strong id="hudFile">--</strong></span>
+                        <span>倍率: <strong id="hudZoom">100%</strong></span>
+                        <span>階調: <strong id="hudWl">B:100% C:100%</strong></span>
+                    </div>
+
+                    <div class="stage-onokai-mark">
+                        <span>✦</span> 医療法人小野会 オリジナルビューワー
+                    </div>
+
+                    <!-- 内視鏡 IEE ドック -->
+                    <div class="iee-dock" id="ieeDock" style="display:none;">
+                        <span style="font-size:0.73rem; color:#7dd3fc; font-weight:700; padding:0 4px;">🔬 強調:</span>
+                        <button type="button" class="iee-btn active" data-iee="normal" onclick="setIeeMode('normal')">🌈 通常</button>
+                        <button type="button" class="iee-btn" data-iee="lci" onclick="setIeeMode('lci')">🔴 発赤(LCI)</button>
+                        <button type="button" class="iee-btn" data-iee="txi" onclick="setIeeMode('txi')">🔆 自然(TXI)</button>
+                        <button type="button" class="iee-btn" data-iee="pale" onclick="setIeeMode('pale')">⚪ 褪色</button>
+                        <button type="button" class="iee-btn" data-iee="nbi" onclick="setIeeMode('nbi')">🟢 血管(NBI)</button>
+                        <button type="button" class="iee-btn" data-iee="ihb" onclick="setIeeMode('ihb')">📊 血流</button>
+                        <button type="button" class="iee-btn" data-iee="texture" onclick="setIeeMode('texture')">🏔️ 構造</button>
+                        <button type="button" class="iee-btn" data-iee="indigo" onclick="setIeeMode('indigo')">🔵 色素散布</button>
+                    </div>
+                </div>
+
+                <!-- ② タイル一覧ギャラリー -->
+                <div class="tile-gallery" id="tileGallery"></div>
+
+                <!-- ③ 心電図ステージ -->
+                <div class="ecg-stage-wrap" id="ecgStage">
+                    <canvas id="ecgCanvas" width="1024" height="704"></canvas>
+                    <div class="stage-hud">
+                        <span>倍率: <strong id="ecgHudZoom">100%</strong></span>
+                        <span>機器: <strong id="ecgHudDevice">Fukuda Denshi</strong></span>
+                    </div>
+                    <div class="stage-onokai-mark">
+                        <span>✦</span> 医療法人小野会 オリジナルビューワー
+                    </div>
+                </div>
+
+                <!-- ④ データなし時 -->
+                <div class="empty-state" id="emptyState" style="display:none;">
+                    <div style="font-size:2.4rem;">💿</div>
+                    <div style="font-size:1.05rem; font-weight:700; color:#e2e8f0;">左側のリストから検査を選択してください</div>
+                    <div style="font-size:0.84rem;">収録されている画像・心電図データをすぐに閲覧できます。</div>
+                </div>
+
+                <!-- 右側サムネイル一覧 -->
+                <aside class="thumb-sidebar" id="thumbSidebar">
+                    <div class="thumb-hdr">
+                        <span>サムネイル (<span id="thumbCount">0</span>)</span>
+                    </div>
+                    <div class="thumb-list" id="thumbList"></div>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <div id="caliperTip"></div>
+    <div id="toastMsg"></div>
+
+    <!-- 操作ガイドモーダル -->
+    <div class="guide-modal-bg" id="guideModal" onclick="if(event.target===this)toggleGuide(false)">
+        <div class="guide-card">
+            <h2>
+                <span>✦ 医療法人小野会 オリジナルビューワーのご案内</span>
+                <button type="button" class="icon-btn" onclick="toggleGuide(false)">✕ 閉じる</button>
+            </h2>
+            <div style="background:linear-gradient(135deg, rgba(12,45,107,0.85) 0%, rgba(2,132,199,0.28) 100%); border:1px solid rgba(251,191,36,0.45); border-radius:8px; padding:11px 14px; margin-bottom:12px;">
+                <div style="font-size:0.75rem; font-weight:700; color:#fcd34d; letter-spacing:0.06em;">MEDICAL CORPORATION ONOKAI — ORIGINAL MEDICAL VIEWER</div>
+                <div style="font-size:0.95rem; font-weight:700; color:#ffffff; margin-top:2px;">医療法人小野会（おの肛門科胃腸科内視鏡クリニック）独自開発ビューワー</div>
+                <div style="font-size:0.81rem; color:#cbd5e1; margin-top:4px;">患者様のご自宅PCや紹介先医療機関様にて、専用ソフトのインストール不要で内視鏡画像（特殊光強調シミュレーション搭載）・超音波・レントゲン・12誘導心電図波形を快適にご覧いただけるよう独自開発したオリジナルビューワーです。</div>
+            </div>
+            <div class="guide-grid">
+                <div class="guide-box">
+                    <strong>📂 1. 検査の切り替え</strong>
+                    画面左側の「収録検査一覧」をクリックすると、検査日・検査種別ごとに表示が切り替わります。
+                </div>
+                <div class="guide-box">
+                    <strong>🖼️ 2. 画像の送り・一覧表示</strong>
+                    画面左右の「◀ / ▶」ボタン、キーボードの矢印キー、または右側のサムネイルで画像を切り替えられます。「田 タイル一覧」で全画像を一覧表示できます。
+                </div>
+                <div class="guide-box">
+                    <strong>🔍 3. 拡大・移動・明るさ調整</strong>
+                    「➕ / ➖」やダブルクリックで拡大し、マウスドラッグで好きな場所へ移動できます。「🌓 階調調整」で明るさ・コントラストも調整可能です。
+                </div>
+                <div class="guide-box">
+                    <strong>⚖️ 4. 2画面比較・心電図計測</strong>
+                    「⚖️ 2画面比較」では過去検査と今回検査を左右に並べて比較できます。心電図ではホイール拡大や「📏 電子キャリパー」による波形計測に対応しています。
+                </div>
+            </div>
+            <div style="font-size:0.78rem; color:#94a3b8; margin-top:8px;">
+                ※ 医療機関様向け：原本DICOM同梱ディスクの場合、ルート直下に <code>DICOMDIR</code> が配置されており、PACSへのメディア取込にも対応しています。
+            </div>
+        </div>
+    </div>
+
+    <!-- 内視鏡IEE用 SVGフィルター定義 -->
+    <svg style="position:absolute; width:0; height:0; overflow:hidden; pointer-events:none;" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <filter id="iee-lci" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="1.45 -0.25 -0.15 0 0.04  -0.10 1.15 -0.10 0 0.00  -0.15 -0.15 1.20 0 0.00  0 0 0 1 0" />
+                <feComponentTransfer>
+                    <feFuncR type="linear" slope="1.15" intercept="-0.04" />
+                    <feFuncG type="linear" slope="1.05" intercept="-0.02" />
+                    <feFuncB type="linear" slope="1.05" intercept="-0.02" />
+                </feComponentTransfer>
+            </filter>
+            <filter id="iee-nbi" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0.20 0.65 0.25 0 -0.05  0.00 0.75 0.35 0 0.00  0.00 0.20 0.85 0 0.05  0 0 0 1 0" />
+                <feComponentTransfer>
+                    <feFuncR type="linear" slope="1.25" intercept="-0.06" />
+                    <feFuncG type="linear" slope="1.10" intercept="0.00" />
+                    <feFuncB type="linear" slope="1.10" intercept="0.00" />
+                </feComponentTransfer>
+            </filter>
+            <filter id="iee-ihb" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="1.80 -0.80 -0.10 0 0.10  -0.40 1.40 -0.10 0 -0.05  -0.80 -0.20 1.80 0 -0.10  0 0 0 1 0" />
+            </filter>
+            <filter id="iee-texture" color-interpolation-filters="sRGB">
+                <feConvolveMatrix order="3" kernelMatrix="-0.3 -0.6 -0.3  -0.6 4.6 -0.6  -0.3 -0.6 -0.3" preserveAlpha="true" />
+            </filter>
+            <filter id="iee-indigo" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0.85 0 0 0 -0.05  0 0.90 0 0 -0.02  0.10 0.20 1.30 0 0.10  0 0 0 1 0" />
+                <feConvolveMatrix order="3" kernelMatrix="-0.2 -0.3 -0.2  -0.3 3.0 -0.3  -0.2 -0.3 -0.2" preserveAlpha="true" />
+            </filter>
+            <filter id="iee-txi" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="1.20 -0.12 -0.06 0 0.02  -0.06 1.14 -0.05 0 0.01  -0.05 -0.06 1.15 0 0.01  0 0 0 1 0" />
+                <feConvolveMatrix order="3" kernelMatrix="-0.2 -0.3 -0.2  -0.3 3.0 -0.3  -0.2 -0.3 -0.2" preserveAlpha="true" />
+                <feComponentTransfer>
+                    <feFuncR type="linear" slope="1.06" intercept="0.01" />
+                    <feFuncG type="linear" slope="1.04" intercept="0.01" />
+                    <feFuncB type="linear" slope="1.04" intercept="0.01" />
+                </feComponentTransfer>
+            </filter>
+            <filter id="iee-pale" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0.78 0.18 0.06 0 -0.02  -0.12 1.22 -0.04 0 0.03  0.06 -0.16 1.38 0 0.05  0 0 0 1 0" />
+                <feConvolveMatrix order="3" kernelMatrix="-0.25 -0.4 -0.25  -0.4 3.6 -0.4  -0.25 -0.4 -0.25" preserveAlpha="true" />
+                <feComponentTransfer>
+                    <feFuncR type="linear" slope="0.95" intercept="0.02" />
+                    <feFuncG type="linear" slope="1.10" intercept="-0.02" />
+                    <feFuncB type="linear" slope="1.15" intercept="-0.03" />
+                </feComponentTransfer>
+            </filter>
+        </defs>
+    </svg>
+
+    <!-- オフライン検査データ読込 (file:// 完全対応) -->
+    <script src="viewer_data/patient_data.js"></script>
+    <script>
+    (function() {
+        const DATA = window.RS_CD_DATA || { patient: {}, meta: {}, exams: [] };
+        const patient = DATA.patient || {};
+        const meta = DATA.meta || {};
+        let allExams = Array.isArray(DATA.exams) ? DATA.exams.slice() : [];
+
+        // 状態管理
+        let sortDesc = true;
+        let activeCategory = 'all';
+        let currentExam = null;
+        let layoutMode = '1'; // '1', '2', 'grid'
+        let activeSlotIdx = 0;
+        let dragMode = 'pan'; // 'pan', 'wl'
+        let wheelMode = 'slice'; // 'slice', 'zoom'
+
+        const slots = [
+            createSlotState(0),
+            createSlotState(1)
+        ];
+
+        function createSlotState(idx) {
+            return {
+                idx,
+                exam: null,
+                imgIndex: 0,
+                zoom: 1,
+                panX: 0,
+                panY: 0,
+                rotation: 0,
+                brightness: 100,
+                contrast: 100,
+                inverted: false,
+                iee: 'normal',
+                olympusFit: false
+            };
+        }
+
+        // 心電図状態
+        let ecgExam = null;
+        let ecgZoom = 1;
+        let ecgPanX = 0;
+        let ecgPanY = 0;
+        let ecgMode = 'pan'; // 'pan', 'caliper'
+        let ecgCalSec = 0.1;
+        let ecgDrift = true;
+        const ecgLwList = [0.8, 1.0, 1.2];
+        let ecgLwIdx = 1;
+        let caliperStart = null;
+        let caliperEnd = null;
+
+        // 初期化
+        function initApp() {
+            document.getElementById('hdrPatId').textContent = 'ID: ' + (patient.id || '----');
+            const yomiPart = patient.yomi ? ` (${patient.yomi})` : '';
+            document.getElementById('hdrPatName').textContent = (patient.name || '患者') + ' 様' + yomiPart;
+
+            const metaParts = [];
+            if (patient.sex) metaParts.push(patient.sex);
+            if (patient.age) metaParts.push(patient.age + '歳');
+            if (patient.birth) metaParts.push('生年月日: ' + patient.birth);
+            document.getElementById('hdrPatMeta').textContent = metaParts.join(' / ');
+
+            const issuerText = meta.issuer || 'おの肛門科胃腸科内視鏡クリニック';
+            const issEl = document.getElementById('hdrIssuer');
+            const parts = ['🏥 ' + issuerText];
+            if (meta.created_at) parts.push('作成: ' + meta.created_at);
+            issEl.textContent = parts.join(' | ');
+            issEl.style.display = 'inline-block';
+
+            const sidebarSub = document.getElementById('sidebarClinicSub');
+            if (sidebarSub) {
+                sidebarSub.textContent = issuerText;
+            }
+
+            if (meta.note) {
+                const nb = document.getElementById('cdNoteBox');
+                nb.textContent = '📋 ご案内: ' + meta.note;
+                nb.style.display = 'block';
+            }
+
+            document.title = `医療法人小野会 オリジナルビューワー | ${patient.name || ''} (${patient.id || ''})`;
+
+            buildCategoryChips();
+            renderExamList();
+
+            if (allExams.length > 0) {
+                const sorted = getFilteredSortedExams();
+                selectExam(sorted[0] || allExams[0]);
+            } else {
+                showEmptyState();
+            }
+
+            setupInteractions();
+        }
+
+        function showToast(msg) {
+            const el = document.getElementById('toastMsg');
+            el.textContent = msg;
+            el.classList.add('show');
+            clearTimeout(showToast._t);
+            showToast._t = setTimeout(() => el.classList.remove('show'), 2200);
+        }
+
+        window.toggleGuide = function(show) {
+            document.getElementById('guideModal').style.display = show ? 'flex' : 'none';
+        };
+
+        document.getElementById('btnToggleExamList').addEventListener('click', () => {
+            document.getElementById('examSidebar').classList.toggle('collapsed');
+            setTimeout(() => {
+                if (currentExam && currentExam.type === 'ecg') fitEcg();
+                else fitSlot(activeSlotIdx, slots[activeSlotIdx].olympusFit);
+            }, 220);
+        });
+
+        document.getElementById('btnSortOrder').addEventListener('click', () => {
+            sortDesc = !sortDesc;
+            document.getElementById('btnSortOrder').textContent = sortDesc ? '新しい順 ▼' : '古い順 ▲';
+            renderExamList();
+        });
+
+        function buildCategoryChips() {
+            const cats = [
+                { key: 'all', label: 'すべて' }
+            ];
+            const labelMap = {
+                endoscopy: '内視鏡',
+                us: '超音波',
+                xray: 'XP・画像',
+                ecg: '心電図',
+                other: 'その他'
+            };
+            const seen = new Set();
+            allExams.forEach(ex => {
+                const c = ex.category || 'other';
+                if (!seen.has(c)) {
+                    seen.add(c);
+                    cats.push({ key: c, label: labelMap[c] || c });
+                }
+            });
+            const wrap = document.getElementById('catChips');
+            wrap.innerHTML = '';
+            cats.forEach(c => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'cat-chip' + (c.key === activeCategory ? ' active' : '');
+                btn.textContent = c.label;
+                btn.onclick = () => {
+                    activeCategory = c.key;
+                    buildCategoryChips();
+                    renderExamList();
+                };
+                wrap.appendChild(btn);
+            });
+        }
+
+        function getFilteredSortedExams() {
+            const list = allExams.filter(ex => activeCategory === 'all' || (ex.category || 'other') === activeCategory);
+            list.sort((a, b) => {
+                const da = (a.date || '') + '_' + String(a.renban || '').padStart(10, '0');
+                const db = (b.date || '') + '_' + String(b.renban || '').padStart(10, '0');
+                return sortDesc ? db.localeCompare(da) : da.localeCompare(db);
+            });
+            return list;
+        }
+
+        function renderExamList() {
+            const list = getFilteredSortedExams();
+            document.getElementById('examTotalCount').textContent = String(list.length);
+            const container = document.getElementById('examListContainer');
+            container.innerHTML = '';
+
+            list.forEach(ex => {
+                const card = document.createElement('div');
+                const cat = ex.category || 'other';
+                card.className = `exam-card cat-${cat}` + (currentExam && currentExam.id_key === ex.id_key ? ' active' : '');
+
+                const modCls = ['endoscopy', 'us', 'xray', 'ecg'].includes(cat) ? `mod-${cat}` : '';
+                const countTxt = ex.type === 'ecg'
+                    ? '12誘導波形'
+                    : `${(ex.images || []).length} 枚`;
+
+                let html = `
+                    <div class="exam-card-top">
+                        <span class="exam-date-txt">${escHtml(ex.date || '')}${ex.time ? ' ' + escHtml(ex.time) : ''}</span>
+                        <span class="mod-badge ${modCls}">${escHtml(ex.kensamei || '検査')}</span>
+                    </div>
+                    <div class="exam-card-mid">
+                        <span>${ex.doctor ? '担当: ' + escHtml(ex.doctor) : ''}</span>
+                        <span class="exam-count-pill">${escHtml(countTxt)}</span>
+                    </div>
+                `;
+                if (meta.include_findings && ex.sindan) {
+                    html += `<div class="exam-sindan-txt">${escHtml(ex.sindan)}</div>`;
+                }
+                if (ex.type !== 'ecg') {
+                    html += `<button type="button" class="compare-send-btn" title="2画面比較の右側スロットにこの検査を表示">右画面に並べる ⚖️</button>`;
+                }
+
+                card.innerHTML = html;
+                card.addEventListener('click', (e) => {
+                    if (e.target && e.target.classList.contains('compare-send-btn')) {
+                        e.stopPropagation();
+                        loadExamIntoSlot(1, ex, 0);
+                        selectSlot(1);
+                        showToast('⚖️ 右画面に「' + (ex.date || '') + ' ' + (ex.kensamei || '') + '」を表示しました');
+                        return;
+                    }
+                    selectExam(ex);
+                });
+                container.appendChild(card);
+            });
+        }
+
+        function updatePrintHeader(ex) {
+            const ph = document.getElementById('printHeader');
+            const parts = [
+                `ID: ${patient.id || '-'}`,
+                `氏名: ${patient.name || '-'} 様`,
+                ex ? `検査: ${ex.kensamei || ''} (${ex.date || ''})` : '',
+                `発行: ${meta.issuer || 'おの肛門科胃腸科内視鏡クリニック'}`,
+                `医療法人小野会 オリジナルビューワー`
+            ].filter(Boolean);
+            ph.textContent = parts.join('   |   ');
+        }
+
+        function showEmptyState() {
+            document.getElementById('imageToolbar').style.display = 'none';
+            document.getElementById('ecgToolbar').style.display = 'none';
+            document.getElementById('imageStage').style.display = 'none';
+            document.getElementById('tileGallery').style.display = 'none';
+            document.getElementById('ecgStage').style.display = 'none';
+            document.getElementById('thumbSidebar').classList.add('hidden');
+            document.getElementById('emptyState').style.display = 'flex';
+        }
+
+        function selectExam(ex) {
+            if (!ex) return;
+            currentExam = ex;
+            renderExamList();
+            updatePrintHeader(ex);
+            document.getElementById('emptyState').style.display = 'none';
+
+            if (ex.type === 'ecg') {
+                document.body.classList.remove('is-compare-mode');
+                document.getElementById('imageToolbar').style.display = 'none';
+                document.getElementById('imageStage').style.display = 'none';
+                document.getElementById('tileGallery').style.display = 'none';
+                document.getElementById('thumbSidebar').classList.add('hidden');
+
+                document.getElementById('ecgToolbar').style.display = 'flex';
+                document.getElementById('ecgStage').style.display = 'block';
+                ecgExam = ex;
+                caliperStart = null;
+                caliperEnd = null;
+                document.getElementById('caliperTip').style.display = 'none';
+                renderEcgCanvas();
+                fitEcg();
+            } else {
+                document.getElementById('ecgToolbar').style.display = 'none';
+                document.getElementById('ecgStage').style.display = 'none';
+                document.getElementById('imageToolbar').style.display = 'flex';
+
+                const isEndo = (ex.category === 'endoscopy');
+                document.getElementById('btnOlympusFit').style.display = isEndo ? 'inline-flex' : 'none';
+                document.getElementById('ieeDock').style.display = isEndo ? 'flex' : 'none';
+
+                loadExamIntoSlot(0, ex, 0);
+                if (layoutMode === '2') {
+                    // スロット1が未設定なら同検査の2枚目(または1枚目)をセット
+                    if (!slots[1].exam) {
+                        const secondIdx = (ex.images && ex.images.length > 1) ? 1 : 0;
+                        loadExamIntoSlot(1, ex, secondIdx);
+                    }
+                }
+                applyLayoutVisibility();
+                buildThumbnails(ex);
+                buildTileGallery(ex);
+            }
+        }
+
+        function loadExamIntoSlot(slotIdx, ex, imgIdx) {
+            const st = slots[slotIdx];
+            st.exam = ex;
+            const imgs = (ex && ex.images) ? ex.images : [];
+            st.imgIndex = Math.max(0, Math.min(imgIdx, Math.max(0, imgs.length - 1)));
+            st.rotation = 0;
+            st.brightness = 100;
+            st.contrast = 100;
+            st.inverted = false;
+            st.iee = 'normal';
+            st.olympusFit = false;
+
+            const imgEl = document.getElementById('img' + slotIdx);
+            const tagEl = document.getElementById('tag' + slotIdx);
+
+            if (imgs.length === 0) {
+                imgEl.removeAttribute('src');
+                tagEl.textContent = (ex ? ex.kensamei : '') + ' (画像なし)';
+                updateSliceUi();
+                return;
+            }
+
+            const item = imgs[st.imgIndex];
+            imgEl.onload = () => {
+                fitSlot(slotIdx, st.olympusFit);
+                updateSlotHud();
+            };
+            imgEl.src = item.src;
+            applySlotFilter(slotIdx);
+            updateSlotTag(slotIdx);
+            updateSliceUi();
+            highlightActiveThumb();
+        }
+
+        function setSlotImageIndex(slotIdx, newIdx) {
+            const st = slots[slotIdx];
+            if (!st.exam || !st.exam.images || st.exam.images.length === 0) return;
+            const imgs = st.exam.images;
+            if (newIdx < 0 || newIdx >= imgs.length) return;
+            st.imgIndex = newIdx;
+            const imgEl = document.getElementById('img' + slotIdx);
+            imgEl.onload = () => {
+                fitSlot(slotIdx, st.olympusFit);
+                updateSlotHud();
+            };
+            imgEl.src = imgs[newIdx].src;
+            updateSlotTag(slotIdx);
+            if (slotIdx === activeSlotIdx) {
+                updateSliceUi();
+                highlightActiveThumb();
+            }
+        }
+
+        function updateSlotTag(slotIdx) {
+            const st = slots[slotIdx];
+            const tagEl = document.getElementById('tag' + slotIdx);
+            if (!st.exam) {
+                tagEl.textContent = '--';
+                return;
+            }
+            const total = (st.exam.images || []).length;
+            const num = total > 0 ? `#${st.imgIndex + 1}/${total}` : '0/0';
+            tagEl.textContent = `${st.exam.date || ''} ${st.exam.kensamei || ''}  ${num}`;
+        }
+
+        function updateSliceUi() {
+            const st = slots[activeSlotIdx];
+            const total = (st.exam && st.exam.images) ? st.exam.images.length : 0;
+            const cur = total > 0 ? st.imgIndex + 1 : 0;
+            document.getElementById('sliceLabel').textContent = `${cur} / ${total}`;
+            updateSlotHud();
+        }
+
+        function updateSlotHud() {
+            const st = slots[activeSlotIdx];
+            const imgs = (st.exam && st.exam.images) ? st.exam.images : [];
+            const item = imgs[st.imgIndex];
+            document.getElementById('hudFile').textContent = item ? (item.name || `#${st.imgIndex + 1}`) : '--';
+            document.getElementById('hudZoom').textContent = Math.round(st.zoom * 100) + '%';
+            document.getElementById('hudWl').textContent = `B:${Math.round(st.brightness)}% C:${Math.round(st.contrast)}%`;
+
+            document.getElementById('btnInvert').classList.toggle('active', st.inverted);
+            document.querySelectorAll('.iee-btn').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-iee') === st.iee);
+            });
+        }
+
+        window.selectSlot = function(idx) {
+            activeSlotIdx = idx;
+            document.getElementById('slot0').classList.toggle('active-slot', idx === 0);
+            document.getElementById('slot1').classList.toggle('active-slot', idx === 1);
+            if (slots[idx].exam && slots[idx].exam !== currentExam) {
+                currentExam = slots[idx].exam;
+                renderExamList();
+                buildThumbnails(currentExam);
+            }
+            updateSliceUi();
+            highlightActiveThumb();
+        };
+
+        window.setLayoutMode = function(mode) {
+            layoutMode = mode;
+            document.querySelectorAll('[data-layout]').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-layout') === mode);
+            });
+            document.body.classList.toggle('is-compare-mode', mode === '2');
+
+            if (mode === '2' && !slots[1].exam && currentExam) {
+                const nextIdx = (currentExam.images && currentExam.images.length > 1) ? 1 : 0;
+                loadExamIntoSlot(1, currentExam, nextIdx);
+            }
+            applyLayoutVisibility();
+        };
+
+        function applyLayoutVisibility() {
+            const stage = document.getElementById('imageStage');
+            const gallery = document.getElementById('tileGallery');
+            const manip = document.getElementById('imageManipTools');
+
+            if (layoutMode === 'grid') {
+                stage.style.display = 'none';
+                gallery.style.display = 'grid';
+                manip.style.opacity = '0.4';
+                manip.style.pointerEvents = 'none';
+            } else {
+                gallery.style.display = 'none';
+                stage.style.display = 'grid';
+                manip.style.opacity = '1';
+                manip.style.pointerEvents = 'auto';
+                stage.className = 'image-stage layout-' + layoutMode;
+                document.getElementById('slot1').style.display = (layoutMode === '2') ? 'flex' : 'none';
+                if (layoutMode === '1') {
+                    activeSlotIdx = 0;
+                    document.getElementById('slot0').classList.add('active-slot');
+                }
+                setTimeout(() => {
+                    fitSlot(0, slots[0].olympusFit);
+                    if (layoutMode === '2') fitSlot(1, slots[1].olympusFit);
+                }, 30);
+            }
+        }
+
+        function fitSlot(slotIdx, olympusMode) {
+            const st = slots[slotIdx];
+            const slotEl = document.getElementById('slot' + slotIdx);
+            const imgEl = document.getElementById('img' + slotIdx);
+            if (!slotEl || !imgEl || !imgEl.naturalWidth) return;
+
+            const vw = slotEl.clientWidth;
+            const vh = slotEl.clientHeight;
+            if (vw <= 0 || vh <= 0) return;
+
+            const iw = imgEl.naturalWidth;
+            const ih = imgEl.naturalHeight;
+            st.olympusFit = !!olympusMode;
+
+            if (olympusMode) {
+                // オリンパス等内視鏡画像の右側検査視野エリアを大きく中央表示
+                const cropLeftRatio = 0.24;
+                const effW = iw * (1 - cropLeftRatio);
+                const scale = Math.min((vw * 0.96) / effW, (vh * 0.94) / ih);
+                st.zoom = scale;
+                const centerSrcX = iw * cropLeftRatio + effW / 2;
+                const centerSrcY = ih / 2;
+                st.panX = (vw / 2) - centerSrcX * scale;
+                st.panY = (vh / 2) - centerSrcY * scale;
+            } else {
+                const pad = 16;
+                const rotSwap = (Math.abs(st.rotation) % 180 === 90);
+                const bw = rotSwap ? ih : iw;
+                const bh = rotSwap ? iw : ih;
+                const scale = Math.min((vw - pad) / bw, (vh - pad) / bh);
+                st.zoom = Math.max(0.05, scale);
+                st.panX = (vw - iw * st.zoom) / 2;
+                st.panY = (vh - ih * st.zoom) / 2;
+            }
+            applySlotTransform(slotIdx);
+            if (slotIdx === activeSlotIdx) updateSlotHud();
+        }
+
+        function applySlotTransform(slotIdx) {
+            const st = slots[slotIdx];
+            const wrap = document.getElementById('wrap' + slotIdx);
+            const img = document.getElementById('img' + slotIdx);
+            if (!wrap || !img) return;
+            wrap.style.transform = `translate(${st.panX}px, ${st.panY}px) scale(${st.zoom})`;
+            img.style.transformOrigin = 'center center';
+            img.style.transform = st.rotation ? `rotate(${st.rotation}deg)` : 'none';
+        }
+
+        function applySlotFilter(slotIdx) {
+            const st = slots[slotIdx];
+            const img = document.getElementById('img' + slotIdx);
+            if (!img) return;
+            const parts = [
+                `brightness(${st.brightness}%)`,
+                `contrast(${st.contrast}%)`
+            ];
+            if (st.inverted) parts.push('invert(100%)');
+            if (st.iee && st.iee !== 'normal') {
+                parts.push(`url(#iee-${st.iee})`);
+            }
+            img.style.filter = parts.join(' ');
+        }
+
+        window.stepSlice = function(delta) {
+            const st = slots[activeSlotIdx];
+            if (!st.exam || !st.exam.images) return;
+            const next = st.imgIndex + delta;
+            if (next >= 0 && next < st.exam.images.length) {
+                setSlotImageIndex(activeSlotIdx, next);
+            }
+        };
+        document.getElementById('btnPrevSlice').onclick = () => stepSlice(-1);
+        document.getElementById('btnNextSlice').onclick = () => stepSlice(1);
+
+        window.setDragMode = function(mode) {
+            dragMode = mode;
+            document.getElementById('btnDragPan').classList.toggle('active', mode === 'pan');
+            document.getElementById('btnDragWl').classList.toggle('active', mode === 'wl');
+            showToast(mode === 'pan' ? '✋ 左ドラッグ: 画像移動モード' : '🌓 左ドラッグ: 明るさ・コントラスト調整モード');
+        };
+
+        window.toggleWheelMode = function() {
+            wheelMode = (wheelMode === 'slice') ? 'zoom' : 'slice';
+            document.getElementById('wheelModeLabel').textContent = (wheelMode === 'slice') ? 'コマ送り' : '拡大縮小';
+            showToast(wheelMode === 'slice' ? '🖱️ ホイール: 前後の画像へコマ送り' : '🖱️ ホイール: 拡大・縮小');
+        };
+
+        window.stepZoom = function(factor) {
+            const st = slots[activeSlotIdx];
+            const slotEl = document.getElementById('slot' + activeSlotIdx);
+            const cx = slotEl.clientWidth / 2;
+            const cy = slotEl.clientHeight / 2;
+            zoomSlotAt(activeSlotIdx, factor, cx, cy);
+        };
+
+        function zoomSlotAt(slotIdx, factor, cx, cy) {
+            const st = slots[slotIdx];
+            const newZoom = Math.min(Math.max(st.zoom * factor, 0.08), 12.0);
+            st.panX = cx - (cx - st.panX) * (newZoom / st.zoom);
+            st.panY = cy - (cy - st.panY) * (newZoom / st.zoom);
+            st.zoom = newZoom;
+            applySlotTransform(slotIdx);
+            if (slotIdx === activeSlotIdx) updateSlotHud();
+        }
+
+        window.fitActiveSlot = function(olympus) {
+            fitSlot(activeSlotIdx, olympus);
+            showToast(olympus ? '⏹️ 内視鏡観察部を拡大フィット' : '⏹️ 画面にフィット');
+        };
+
+        window.rotateActiveSlot = function() {
+            const st = slots[activeSlotIdx];
+            st.rotation = (st.rotation + 90) % 360;
+            applySlotTransform(activeSlotIdx);
+        };
+
+        window.toggleInvert = function() {
+            const st = slots[activeSlotIdx];
+            st.inverted = !st.inverted;
+            applySlotFilter(activeSlotIdx);
+            updateSlotHud();
+        };
+
+        window.toggleIeeBar = function() {
+            const dock = document.getElementById('ieeDock');
+            dock.style.display = (dock.style.display === 'none') ? 'flex' : 'none';
+        };
+
+        window.setIeeMode = function(mode) {
+            const st = slots[activeSlotIdx];
+            st.iee = mode;
+            applySlotFilter(activeSlotIdx);
+            updateSlotHud();
+        };
+
+        window.resetActiveSlot = function() {
+            const st = slots[activeSlotIdx];
+            st.rotation = 0;
+            st.brightness = 100;
+            st.contrast = 100;
+            st.inverted = false;
+            st.iee = 'normal';
+            st.olympusFit = false;
+            applySlotFilter(activeSlotIdx);
+            fitSlot(activeSlotIdx, false);
+            showToast('🔄 表示をリセットしました');
+        };
+
+        window.toggleThumbSidebar = function() {
+            document.getElementById('thumbSidebar').classList.toggle('hidden');
+            setTimeout(() => fitSlot(activeSlotIdx, slots[activeSlotIdx].olympusFit), 50);
+        };
+
+        function buildThumbnails(ex) {
+            const sb = document.getElementById('thumbSidebar');
+            const listEl = document.getElementById('thumbList');
+            const imgs = (ex && ex.images) ? ex.images : [];
+            document.getElementById('thumbCount').textContent = String(imgs.length);
+            listEl.innerHTML = '';
+
+            if (imgs.length <= 1) {
+                sb.classList.add('hidden');
+            } else {
+                sb.classList.remove('hidden');
+            }
+
+            imgs.forEach((item, idx) => {
+                const div = document.createElement('div');
+                div.className = 'thumb-item' + (idx === slots[activeSlotIdx].imgIndex ? ' active' : '');
+                div.innerHTML = `<img src="${escAttr(item.thumb || item.src)}" loading="lazy" alt=""><span class="thumb-num">#${idx + 1}</span>`;
+                div.onclick = () => {
+                    if (layoutMode === 'grid') setLayoutMode('1');
+                    setSlotImageIndex(activeSlotIdx, idx);
+                };
+                listEl.appendChild(div);
+            });
+        }
+
+        function highlightActiveThumb() {
+            const st = slots[activeSlotIdx];
+            const items = document.querySelectorAll('#thumbList .thumb-item');
+            items.forEach((el, idx) => {
+                const active = (st.exam === currentExam && idx === st.imgIndex);
+                el.classList.toggle('active', active);
+                if (active) el.scrollIntoView({ block: 'nearest' });
+            });
+        }
+
+        function buildTileGallery(ex) {
+            const gal = document.getElementById('tileGallery');
+            gal.innerHTML = '';
+            const imgs = (ex && ex.images) ? ex.images : [];
+            imgs.forEach((item, idx) => {
+                const card = document.createElement('div');
+                card.className = 'tile-card';
+                card.innerHTML = `
+                    <div class="tile-img-box"><img src="${escAttr(item.thumb || item.src)}" loading="lazy" alt=""></div>
+                    <div class="tile-caption"><span>#${idx + 1}</span><span>${escHtml(item.name || '')}</span></div>
+                `;
+                card.onclick = () => {
+                    setLayoutMode('1');
+                    setSlotImageIndex(0, idx);
+                };
+                gal.appendChild(card);
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // 12誘導心電図描画エンジン (25mm/s, 10mm/mV + 電子キャリパー)
+        // ------------------------------------------------------------------
+        function applyDriftFilter(wave) {
+            if (!wave || wave.length < 50) return wave;
+            const len = wave.length;
+            const out = new Float32Array(len);
+            const halfWin = 175;
+            const prefix = new Float64Array(len + 1);
+            for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + wave[i];
+            for (let i = 0; i < len; i++) {
+                const s = Math.max(0, i - halfWin);
+                const e = Math.min(len, i + halfWin);
+                out[i] = wave[i] - (prefix[e] - prefix[s]) / (e - s);
+            }
+            return out;
+        }
+
+        function renderEcgCanvas() {
+            if (!ecgExam || !ecgExam.ecg_data || !ecgExam.ecg_data.leads) return;
+            const ecgData = ecgExam.ecg_data;
+            const canvas = document.getElementById('ecgCanvas');
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+
+            document.getElementById('ecgHudDevice').textContent = ecgData.device || 'Fukuda Denshi';
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+
+            const gX0 = 20, gY0 = 150, gX1 = w - 20, gY1 = h - 34;
+
+            // 1mm方眼
+            ctx.strokeStyle = '#fecdd3';
+            ctx.lineWidth = 0.6;
+            ctx.beginPath();
+            for (let x = gX0; x <= gX1; x += 4) { ctx.moveTo(x, gY0); ctx.lineTo(x, gY1); }
+            for (let y = gY0; y <= gY1; y += 4) { ctx.moveTo(gX0, y); ctx.lineTo(gX1, y); }
+            ctx.stroke();
+
+            // 5mm太線方眼
+            ctx.strokeStyle = '#f87171';
+            ctx.lineWidth = 0.9;
+            ctx.beginPath();
+            for (let x = gX0; x <= gX1; x += 20) { ctx.moveTo(x, gY0); ctx.lineTo(x, gY1); }
+            for (let y = gY0; y <= gY1; y += 20) { ctx.moveTo(gX0, y); ctx.lineTo(gX1, y); }
+            ctx.stroke();
+
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 1.2;
+            ctx.strokeRect(gX0, gY0, gX1 - gX0, gY1 - gY0);
+
+            // ヘッダー情報
+            ctx.fillStyle = '#1e3a8a';
+            ctx.font = 'bold 15px Consolas, monospace';
+            const dtStr = (ecgData.date || ecgExam.date || '').replace(/^(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\s+\d{1,2}:\d{2})(?::\d{2})?.*$/, '$1');
+            ctx.fillText(`${dtStr}  12誘導安静時心電図  ID:${patient.id || ''}  氏名:${patient.name || ''} 様`, gX0, 26);
+
+            const m = ecgData.measurements || {};
+            const mX = gX0 + 20;
+            ctx.fillStyle = '#0f172a';
+            ctx.font = '12px Consolas, monospace';
+            const hrVal = m.hr ? `${m.hr}/分` : '--/分';
+            const hrNote = (m.hr && m.hr < 60) ? '洞性徐脈' : ((m.hr && m.hr > 100) ? '洞性頻脈' : '洞調律');
+            ctx.fillText(`心拍数 = ${hrVal}  (${hrNote})`, mX, 54);
+            ctx.fillText(`R-R    = ${m.rr_sec ? Number(m.rr_sec).toFixed(3) : '--'} 秒`, mX, 74);
+            ctx.fillText(`P-R    = ${m.pr_sec ? Number(m.pr_sec).toFixed(3) : '--'} 秒`, mX, 94);
+            ctx.fillText(`QRS    = ${m.qrs_sec ? Number(m.qrs_sec).toFixed(3) : '--'} 秒`, mX, 114);
+            ctx.fillText(`QT     = ${m.qt_sec ? Number(m.qt_sec).toFixed(3) : '--'} 秒   QTcB/F = ${m.qtc_b || '--'} / ${m.qtc_f || '--'}`, mX, 134);
+
+            const mX2 = mX + 360;
+            ctx.fillText(`電気軸 = ${m.axis_deg !== undefined ? m.axis_deg : '--'} 度`, mX2, 54);
+            if (meta.include_findings && ecgExam.sindan) {
+                ctx.fillStyle = '#be185d';
+                ctx.font = 'bold 12px sans-serif';
+                ctx.fillText(`所見: ${ecgExam.sindan}`, mX2, 82);
+            }
+            if (meta.issuer) {
+                ctx.fillStyle = '#475569';
+                ctx.font = '11px sans-serif';
+                ctx.fillText(`発行元: ${meta.issuer}`, mX2, 110);
+            }
+
+            // 12誘導波形
+            const leads = ecgData.leads;
+            const leftLeads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF'];
+            const rightLeads = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6'];
+            const rowSpacing = 80;
+            const baseYStart = gY0 + 50;
+            const pxPerMv = 40.0;
+            const sampleRate = ecgData.sample_rate_hz || 500;
+            const pxPerSample = 100.0 / sampleRate;
+            const calPx = (ecgCalSec === 0.2 ? 20 : 10);
+            const lw = ecgLwList[ecgLwIdx];
+
+            function drawCal(sx, cy) {
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = lw;
+                ctx.beginPath();
+                ctx.moveTo(sx, cy);
+                ctx.lineTo(sx, cy - 40);
+                ctx.lineTo(sx + calPx, cy - 40);
+                ctx.lineTo(sx + calPx, cy);
+                ctx.lineTo(sx + calPx + 6, cy);
+                ctx.stroke();
+            }
+
+            const calStartX = gX0 + 8;
+            const xLeft = calStartX + calPx + 8;
+            const maxSamples = Math.round(4.5 * sampleRate);
+
+            leftLeads.forEach((name, idx) => {
+                const cy = baseYStart + idx * rowSpacing;
+                ctx.fillStyle = '#1d4ed8';
+                ctx.font = 'bold 12px sans-serif';
+                ctx.fillText(name, calStartX, cy + 14);
+                drawCal(calStartX, cy);
+
+                const raw = leads[name] || [];
+                const wave = ecgDrift ? applyDriftFilter(raw) : raw;
+                const len = Math.min(maxSamples, wave.length);
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = lw;
+                ctx.beginPath();
+                for (let s = 0; s < len; s++) {
+                    const px = xLeft + s * pxPerSample;
+                    const py = cy - wave[s] * pxPerMv;
+                    if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                }
+                ctx.stroke();
+            });
+
+            const gXMid = gX0 + (gX1 - gX0) / 2;
+            const xRight = gXMid + 32;
+            rightLeads.forEach((name, idx) => {
+                const cy = baseYStart + idx * rowSpacing;
+                ctx.fillStyle = '#1d4ed8';
+                ctx.font = 'bold 12px sans-serif';
+                ctx.fillText(name, gXMid + 6, cy + 14);
+
+                const raw = leads[name] || [];
+                const wave = ecgDrift ? applyDriftFilter(raw) : raw;
+                const len = Math.min(maxSamples, wave.length);
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = lw;
+                ctx.beginPath();
+                for (let s = 0; s < len; s++) {
+                    const px = xRight + s * pxPerSample;
+                    const py = cy - wave[s] * pxPerMv;
+                    if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                }
+                ctx.stroke();
+            });
+
+            ctx.fillStyle = '#1e3a8a';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(`25.0mm/sec   10mm/mV   較正:${ecgCalSec}s(1mV)   線幅:${lw.toFixed(1)}px   ドリフト補正:${ecgDrift ? 'ON' : 'OFF'}`, gX0 + 10, gY1 + 18);
+
+            if (caliperStart && caliperEnd) {
+                ctx.save();
+                ctx.strokeStyle = '#06b6d4';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(caliperStart.x, 0); ctx.lineTo(caliperStart.x, h);
+                ctx.moveTo(caliperEnd.x, 0);   ctx.lineTo(caliperEnd.x, h);
+                ctx.stroke();
+
+                ctx.strokeStyle = '#ec4899';
+                ctx.beginPath();
+                ctx.moveTo(0, caliperStart.y); ctx.lineTo(w, caliperStart.y);
+                ctx.moveTo(0, caliperEnd.y);   ctx.lineTo(w, caliperEnd.y);
+                ctx.stroke();
+
+                ctx.setLineDash([]);
+                ctx.strokeStyle = '#eab308';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(caliperStart.x, caliperStart.y);
+                ctx.lineTo(caliperEnd.x, caliperEnd.y);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        function updateEcgTransform() {
+            const c = document.getElementById('ecgCanvas');
+            c.style.transform = `translate(${ecgPanX}px, ${ecgPanY}px) scale(${ecgZoom})`;
+            document.getElementById('ecgHudZoom').textContent = Math.round(ecgZoom * 100) + '%';
+        }
+
+        window.fitEcg = function() {
+            const stg = document.getElementById('ecgStage');
+            const c = document.getElementById('ecgCanvas');
+            if (!stg.clientWidth || !stg.clientHeight) return;
+            const pad = 20;
+            ecgZoom = Math.min((stg.clientWidth - pad * 2) / c.width, (stg.clientHeight - pad * 2) / c.height, 1.6);
+            ecgPanX = Math.round((stg.clientWidth - c.width * ecgZoom) / 2);
+            ecgPanY = Math.round((stg.clientHeight - c.height * ecgZoom) / 2);
+            updateEcgTransform();
+        };
+
+        window.oneToOneEcg = function() {
+            const stg = document.getElementById('ecgStage');
+            const c = document.getElementById('ecgCanvas');
+            ecgZoom = 1.0;
+            ecgPanX = Math.round((stg.clientWidth - c.width) / 2);
+            ecgPanY = Math.round((stg.clientHeight - c.height) / 2);
+            updateEcgTransform();
+        };
+
+        window.setEcgMode = function(m) {
+            ecgMode = m;
+            document.getElementById('btnEcgPan').classList.toggle('active', m === 'pan');
+            document.getElementById('btnEcgCaliper').classList.toggle('active', m === 'caliper');
+            document.getElementById('ecgStage').classList.toggle('caliper-cursor', m === 'caliper');
+            if (m === 'pan') {
+                caliperStart = null; caliperEnd = null;
+                document.getElementById('caliperTip').style.display = 'none';
+                renderEcgCanvas();
+            } else {
+                showToast('📏 波形上をドラッグして時間(ms)と電位(mV)を計測できます');
+            }
+        };
+
+        window.toggleEcgCal = function() {
+            ecgCalSec = (ecgCalSec === 0.1 ? 0.2 : 0.1);
+            document.getElementById('ecgCalLabel').textContent = ecgCalSec + 's';
+            renderEcgCanvas();
+        };
+
+        window.toggleEcgDrift = function() {
+            ecgDrift = !ecgDrift;
+            document.getElementById('ecgDriftLabel').textContent = ecgDrift ? 'ON' : 'OFF';
+            document.getElementById('btnEcgDrift').classList.toggle('active', ecgDrift);
+            renderEcgCanvas();
+        };
+
+        window.cycleEcgLineWidth = function() {
+            ecgLwIdx = (ecgLwIdx + 1) % ecgLwList.length;
+            document.getElementById('ecgLwLabel').textContent = ecgLwList[ecgLwIdx].toFixed(1) + 'px';
+            renderEcgCanvas();
+        };
+
+        window.resetEcg = function() {
+            caliperStart = null; caliperEnd = null;
+            document.getElementById('caliperTip').style.display = 'none';
+            renderEcgCanvas();
+            fitEcg();
+        };
+
+        // ------------------------------------------------------------------
+        // マウス・キーボードイベント
+        // ------------------------------------------------------------------
+        function setupInteractions() {
+            // 画像スロットのマウス操作
+            [0, 1].forEach(slotIdx => {
+                const slotEl = document.getElementById('slot' + slotIdx);
+                let dragging = false;
+                let lastX = 0, lastY = 0;
+                let btnUsed = 0;
+
+                slotEl.addEventListener('contextmenu', e => e.preventDefault());
+
+                slotEl.addEventListener('mousedown', e => {
+                    selectSlot(slotIdx);
+                    dragging = true;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    btnUsed = e.button;
+                    slotEl.classList.add('grabbing');
+                });
+
+                window.addEventListener('mousemove', e => {
+                    if (!dragging) return;
+                    const dx = e.clientX - lastX;
+                    const dy = e.clientY - lastY;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    const st = slots[slotIdx];
+
+                    if (btnUsed === 2) {
+                        // 右ドラッグ: ズーム
+                        const factor = dy < 0 ? 1.03 : 0.97;
+                        zoomSlotAt(slotIdx, factor, slotEl.clientWidth / 2, slotEl.clientHeight / 2);
+                    } else if (btnUsed === 1 || dragMode === 'pan') {
+                        // 平行移動
+                        st.panX += dx;
+                        st.panY += dy;
+                        applySlotTransform(slotIdx);
+                    } else if (dragMode === 'wl') {
+                        // 輝度・コントラスト
+                        st.contrast = Math.min(300, Math.max(30, st.contrast + dx * 0.4));
+                        st.brightness = Math.min(280, Math.max(30, st.brightness - dy * 0.4));
+                        applySlotFilter(slotIdx);
+                        updateSlotHud();
+                    }
+                });
+
+                window.addEventListener('mouseup', () => {
+                    if (dragging) {
+                        dragging = false;
+                        slotEl.classList.remove('grabbing');
+                    }
+                });
+
+                slotEl.addEventListener('dblclick', () => {
+                    const st = slots[slotIdx];
+                    if (st.exam && st.exam.category === 'endoscopy') {
+                        fitSlot(slotIdx, !st.olympusFit);
+                    } else {
+                        if (st.zoom < 1.3) zoomSlotAt(slotIdx, 1.8, slotEl.clientWidth / 2, slotEl.clientHeight / 2);
+                        else fitSlot(slotIdx, false);
+                    }
+                });
+
+                slotEl.addEventListener('wheel', e => {
+                    e.preventDefault();
+                    selectSlot(slotIdx);
+                    if (e.ctrlKey || wheelMode === 'zoom') {
+                        const rect = slotEl.getBoundingClientRect();
+                        const factor = e.deltaY < 0 ? 1.14 : 0.88;
+                        zoomSlotAt(slotIdx, factor, e.clientX - rect.left, e.clientY - rect.top);
+                    } else {
+                        stepSlice(e.deltaY > 0 ? 1 : -1);
+                    }
+                }, { passive: false });
+            });
+
+            // 心電図ステージのマウス操作
+            const ecgStage = document.getElementById('ecgStage');
+            const ecgCanvas = document.getElementById('ecgCanvas');
+            let ecgDragging = false;
+            let ecgStartX = 0, ecgStartY = 0;
+
+            ecgStage.addEventListener('mousedown', e => {
+                ecgDragging = true;
+                ecgStartX = e.clientX;
+                ecgStartY = e.clientY;
+                if (ecgMode === 'caliper') {
+                    const r = ecgCanvas.getBoundingClientRect();
+                    caliperStart = { x: (e.clientX - r.left) / ecgZoom, y: (e.clientY - r.top) / ecgZoom };
+                    caliperEnd = { x: caliperStart.x, y: caliperStart.y };
+                } else {
+                    ecgStage.classList.add('grabbing');
+                }
+            });
+
+            window.addEventListener('mousemove', e => {
+                if (!ecgDragging) return;
+                if (ecgMode === 'caliper' && caliperStart) {
+                    const r = ecgCanvas.getBoundingClientRect();
+                    caliperEnd = { x: (e.clientX - r.left) / ecgZoom, y: (e.clientY - r.top) / ecgZoom };
+                    renderEcgCanvas();
+                    const dtMs = Math.round(Math.abs(caliperEnd.x - caliperStart.x) * 10);
+                    const bpm = dtMs > 0 ? Math.round(60000 / dtMs) : '--';
+                    const dvMv = (Math.abs(caliperEnd.y - caliperStart.y) * 0.025).toFixed(2);
+                    const tip = document.getElementById('caliperTip');
+                    tip.style.display = 'block';
+                    tip.style.left = (e.clientX + 14) + 'px';
+                    tip.style.top = (e.clientY + 14) + 'px';
+                    tip.innerHTML = `⏱️ 時間: <strong>${dtMs} ms</strong> (${bpm} bpm)<br>⚡ 電位: <strong>${dvMv} mV</strong>`;
+                } else {
+                    ecgPanX += (e.clientX - ecgStartX);
+                    ecgPanY += (e.clientY - ecgStartY);
+                    ecgStartX = e.clientX;
+                    ecgStartY = e.clientY;
+                    updateEcgTransform();
+                }
+            });
+
+            window.addEventListener('mouseup', () => {
+                if (ecgDragging) {
+                    ecgDragging = false;
+                    ecgStage.classList.remove('grabbing');
+                }
+            });
+
+            ecgStage.addEventListener('wheel', e => {
+                e.preventDefault();
+                const rect = ecgStage.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                const factor = e.deltaY < 0 ? 1.15 : 0.88;
+                const nz = Math.min(Math.max(ecgZoom * factor, 0.25), 6.0);
+                ecgPanX = mx - (mx - ecgPanX) * (nz / ecgZoom);
+                ecgPanY = my - (my - ecgPanY) * (nz / ecgZoom);
+                ecgZoom = nz;
+                updateEcgTransform();
+            }, { passive: false });
+
+            // キーボード操作
+            window.addEventListener('keydown', e => {
+                if (document.getElementById('guideModal').style.display === 'flex') {
+                    if (e.key === 'Escape') toggleGuide(false);
+                    return;
+                }
+                if (!currentExam) return;
+                if (currentExam.type === 'ecg') {
+                    if (e.key === 'f' || e.key === 'F') fitEcg();
+                    else if (e.key === 'r' || e.key === 'R') resetEcg();
+                } else {
+                    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); stepSlice(-1); }
+                    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); stepSlice(1); }
+                    else if (e.key === 'f' || e.key === 'F') fitActiveSlot(false);
+                    else if (e.key === 'o' || e.key === 'O') fitActiveSlot(true);
+                    else if (e.key === 'r' || e.key === 'R') resetActiveSlot();
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                if (!currentExam) return;
+                if (currentExam.type === 'ecg') fitEcg();
+                else if (layoutMode !== 'grid') {
+                    fitSlot(0, slots[0].olympusFit);
+                    if (layoutMode === '2') fitSlot(1, slots[1].olympusFit);
+                }
+            });
+        }
+
+        function escHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+        function escAttr(s) { return escHtml(s); }
+
+        initApp();
+    })();
+    </script>
+</body>
+</html>

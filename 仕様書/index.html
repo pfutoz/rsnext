@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RS-Next 医用画像ファイリングシステム 統合仕様書ポータル</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <!-- 共通グローバルナビゲーション -->
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html" class="active">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+            <a href="mwl_order_spec.html">⑥ 撮影依頼・DICOM MWL</a>
+            <a href="server_setup_guide.html">⑦ Server 2025 構築手順</a>
+        </div>
+    </nav>
+
+    <!-- ヒーローヘッダー -->
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">✨ RS-Next v1.0.0 公式設計仕様書</span>
+            <span class="badge badge-glass">おの肛門科胃腸科内視鏡クリニック</span>
+            <span class="badge badge-glass">Modality Studio 搭載</span>
+            <span class="badge badge-glass">Windows Server 2025 / PostgreSQL 18 対応</span>
+        </div>
+        <h1>🏥 RS-Next 医用画像ファイリングシステム 統合技術仕様書</h1>
+        <p>
+            現行 RS-Base サーバ（<code>192.168.1.164</code>：2001年版 Apache 1.3 ＋ Perl CGI ＋ <code>SHIFT_JIS</code> PostgreSQL）を完全リプレースし、
+            <strong>「院内モダリティ5種7台からの1〜2秒リアルタイム蓄積」「ノーコード装置管理 Modality Studio」「MALL3 患者CSV連携」「ゼロインストールWeb閲覧・検査編集・2×4印刷・CD直焼き・JPEG一発保存」</strong>を実現する次世代医用画像基盤の統合ドキュメントです。
+        </p>
+        <div class="hero-meta">
+            <span>📂 プロジェクトルート: <code>C:\Apache24\htdocs\rsnext\</code></span>
+            <span>🗄️ データベース: <code>PostgreSQL 18 (UTF-8 / rsnext_db)</code></span>
+            <span>📅 策定・更新日: 2026年11月17日</span>
+        </div>
+    </header>
+
+    <!-- ページ内目次 -->
+    <div class="toc-bar">
+        <strong>📌 ページ内移動:</strong>
+        <a href="#sec-portal">📚 分野別 詳細仕様書</a>
+        <a href="#sec-decisions">✅ 確定済み5大設計方針</a>
+        <a href="#sec-legacy">🔍 旧サーバ実機解析サマリー</a>
+        <a href="#sec-arch">🏗️ 全体アーキテクチャ</a>
+        <a href="#sec-repo">📦 リポジトリ構成・実装状況</a>
+    </div>
+
+    <!-- 分野別 詳細仕様書ポータルカード -->
+    <section id="sec-portal">
+        <div class="portal-grid">
+            <a href="architecture_storage_spec.html" class="portal-card" style="border-top: 4px solid #1d4ed8;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#dbeafe;">🏗️</div>
+                        <div class="portal-card-title">① インフラ・非RAIDマルチSSD・ディレクトリ仕様書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        Windows Server 2025 における非RAID単体NTFS（4TB SSD×4本＋8TB HDD）構成、<code>VOL_ARCHIVE</code> / <code>VOL_ACTIVE</code> 分割、<code>studies/YYYY/MM/DD/</code> 階層設計、自己修復 <code>study_meta.json</code>、<code>server_config.json</code> 全設定リファレンス。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span><code>config/server_config.json</code> 対応</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="db_schema_spec.html" class="portal-card" style="border-top: 4px solid #0d9488;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#ccfbf1;">🗄️</div>
+                        <div class="portal-card-title">② 完全UTF-8 データベース設計書（PostgreSQL 18）</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        <code>SHIFT_JIS</code> を撤廃した完全 UTF-8 全7テーブル（<code>patients</code>, <code>modality_profiles</code>, <code>discovered_devices</code>, <code>studies</code>, <code>study_files</code>, <code>quarantine_queue</code>, <code>ingest_logs</code>）のカラム定義・<code>pg_trgm</code> インデックス・ER図。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span><code>sql/001_schema.sql</code> 対応</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="modality_studio_ingest_spec.html" class="portal-card" style="border-top: 4px solid #6d28d9;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#ede9fe;">🎛️</div>
+                        <div class="portal-card-title">③ Modality Studio ＆ 自動取込エンジン仕様書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        新規装置の自動検出レーダー（1クリック登録）、業者向け接続案内シート印刷、D&amp;D振分シミュレータ、および内蔵FTP・DICOM SCP・フクダ心電図ハフマン解析・MALL3 21列CSV監視・Quarantine隔離救済の詳細仕様。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span><code>ingest_service/*</code> 対応</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="web_viewer_output_spec.html" class="portal-card" style="border-top: 4px solid #0284c7;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#e0f2fe;">🖥️</div>
+                        <div class="portal-card-title">④ Web閲覧・検査編集・2×4印刷・CD作成・JPEG出力仕様書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        Webブラウザ完結DICOM/12誘導心電図ビューワ、旧 <code>2000.cgi</code> を代替する所見編集・誤ID付け替え・ゴミ箱モーダル、他院CD/PDF D&amp;D取込、オリンパス自動サークルフィット対応 2×4 印刷、IMAPI2 ダイレクトCD-R作成、胃がん検診JPEG一発保存。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span>Web UI / 出力ツール一式対応</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="migration_operation_spec.html" class="portal-card" style="border-top: 4px solid #059669;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#dcfce7;">🚚</div>
+                        <div class="portal-card-title">⑤ 3.17TB 無停止データ移行・本番切替・BCP運用仕様書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        現行 <code>192.168.1.164</code>（19.3万検査・17.9万患者）に一切触れず段階移行する3フェーズ手順、放置 <code>~NoNumber.dcm</code> 26件の救出、<code>192.168.1.164</code> IP引き継ぎカットオーバー、SSD突然死時の1分ドライブ文字切替復旧手順。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span>移行・保守・障害復旧マニュアル</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="mwl_order_spec.html" class="portal-card" style="border-top: 4px solid #e11d48;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#ffe4e6;">📋</div>
+                        <div class="portal-card-title">⑥ モダリティ別 撮影依頼・患者データ受渡 ＆ DICOM MWL 仕様書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        当院全5種7台（島津CXDI・ARIETTA 65・フジ/オリンパス MV-3C・フクダ心電計 FCP-8300/8321）別の最適な患者属性受け渡し検討、DICOM MWL (<code>C-FIND</code>)・MPPS・スマートID照会・画面Code39バーコード・着信時自動消し込み仕様。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span><code>worklist.php</code> / <code>mwl_scp.py</code> 対応</span>
+                    <span>仕様書を開く ➔</span>
+                </div>
+            </a>
+
+            <a href="server_setup_guide.html" class="portal-card" style="border-top: 4px solid #d97706;">
+                <div>
+                    <div class="portal-card-head">
+                        <div class="portal-card-icon" style="background:#fef3c7;">🚀</div>
+                        <div class="portal-card-title">⑦ Windows Server 2025（192.168.1.163）実機構築・非RAID化手順書</div>
+                    </div>
+                    <div class="portal-card-desc">
+                        Cドライブ（OS）を温存しBIOSに触れず <code>AMD RAIDXpert2</code> でデータ用RAIDを単体4TB×4本へ分割する手順と、<code>server_setup/*.ps1</code> によるDB・Web・MWL・自動ミラー一括構築ガイド。
+                    </div>
+                </div>
+                <div class="portal-card-foot">
+                    <span><code>server_setup/*.ps1</code> 対応</span>
+                    <span>手順書を開く ➔</span>
+                </div>
+            </a>
+        </div>
+    </section>
+
+    <!-- 1. 確定済み5大設計方針 -->
+    <section class="card" id="sec-decisions">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>✅</span><span>1. 確定済み 5大基本方針（プロジェクト合意事項）</span></div>
+            <span class="badge badge-green">全項目確定済</span>
+        </div>
+
+        <div class="alert alert-purple">
+            <div class="alert-title">🎛️ 【追加コア仕様】Modality Studio（ノーコード・プラグ＆プレイ装置管理インターフェース）</div>
+            将来モダリティが増設・機種変更された際にも設定ファイル編集やプログラム改修を一切不要にするため、<strong>①未登録装置からのテスト送信を自動検知してワンクリック登録できる「自動検出レーダー」</strong>、<strong>②メーカー担当者へ渡せる「接続設定シート印刷」</strong>、<strong>③サンプルファイルをドロップして検査名判定を試せる「振分シミュレータ」</strong>、<strong>④PDF検査レポート・JPEG写真・HTTP APIまで受け入れる広い間口</strong>を標準装備します。
+        </div>
+
+        <div class="grid-2">
+            <div class="sub-card" style="background:#f0fdf4; border-color:#86efac;">
+                <h4>🌐 方針①：仮IPで事前構築・検証後、本番は 192.168.1.164 を継承</h4>
+                <p style="margin:0;">
+                    開発・並行リハーサル時は独立IP（開発機 <code>192.168.1.111</code> ➔ 新サーバ仮IP）で旧データを丸ごとコンバート検証し、カットオーバー時に新サーバへ <strong><code>192.168.1.164</code></strong> を引き継ぎます。院内7台のモダリティやMALL3の送信先変更費用・業者手配はゼロです。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#f0fdf4; border-color:#86efac;">
+                <h4>🔌 方針②：現行プロトコル完全互換（モダリティ側無変更着信）</h4>
+                <p style="margin:0;">
+                    <strong>Port 21 (FTP)</strong> 内視鏡着信、<strong>Port 104 (DICOM SCP)</strong> 任意AEタイトル自動受理、<strong>Port 1001 (TCP)</strong> フクダ電子心電計 <code>C:\FUKUDA_ECG\ORG</code> 監視、<strong>Port 445 (SMB)</strong> <code>DRS</code> / <code>DRS2</code> 患者CSV監視を完全再現し、着信から<strong>0.5〜2秒以内</strong>に即時反映します。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#f0fdf4; border-color:#86efac;">
+                <h4>🖥️ 方針③：Webブラウザ完結表示を標準化（従来EXE併用スイッチ付）</h4>
+                <p style="margin:0;">
+                    診察室PCへの専用ソフト導入・常駐設定が不要な<strong>ブラウザ完結表示（Web DICOMビューワ／Web 12誘導心電図ビューワ）</strong>を標準とします。保存ファイルは標準連番 <code>0001.dcm</code> / <code>0001.ECG</code> のため、<code>enable_legacy_local_viewer</code> スイッチ1つで旧 <code>rsview.exe</code> 等も併用可能です。
+                </p>
+            </div>
+            <div class="sub-card" style="background:#f0fdf4; border-color:#86efac;">
+                <h4>💾 方針④：Windows Server 2025 非RAID「4TB SSD×4 ＋ 8TB HDD」</h4>
+                <p style="margin:0;">
+                    素人では復旧困難なRAIDを組まず、単体NTFSドライブとして <strong><code>D:</code> 過去アーカイブ（〜2021年）</strong>、<strong><code>E:</code> 現役領域（2022年〜）</strong>、<strong><code>F:</code>/<code>G:</code> <code>robocopy /MIR</code> 常時同期ミラー（障害時1分切替）</strong>、<strong><code>H:</code> 8TB HDD 夜間バックアップ</strong>の3重防御で運用します。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. 旧サーバ実機解析サマリー -->
+    <section class="card" id="sec-legacy">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔍</span><span>2. 現行 RS-Base（192.168.1.164）実機解析データと刷新ポイント</span></div>
+            <span class="badge badge-slate">実機 Read-Only 解析結果</span>
+        </div>
+
+        <div class="kpi-grid">
+            <div class="kpi-box danger">
+                <div class="kpi-label">現行 Dドライブ使用量</div>
+                <div class="kpi-val">3.17 TB / 3.60 TB</div>
+                <div class="kpi-sub">残り <strong>436.8 GB（使用率 88%）</strong> → 合計8TB現役+アーカイブへ拡張</div>
+            </div>
+            <div class="kpi-box info">
+                <div class="kpi-label">蓄積検査レコード数（gazou_tbl）</div>
+                <div class="kpi-val">193,822 件</div>
+                <div class="kpi-sub">2000年〜2026年11月（<code>legacy_renban</code> として完全継承）</div>
+            </div>
+            <div class="kpi-box teal">
+                <div class="kpi-label">登録患者マスタ数（name_tbl）</div>
+                <div class="kpi-val">179,659 名</div>
+                <div class="kpi-sub">MALL3 <code>DRS</code> / <code>DRS2</code> 21列CSV連携をUTF-8化</div>
+            </div>
+            <div class="kpi-box purple">
+                <div class="kpi-label">着信反映スピード</div>
+                <div class="kpi-val">70秒 ➔ 1〜2秒</div>
+                <div class="kpi-sub"><code>RS_Auto.exe</code> ポーリング廃止・イベント駆動＋先行キャッシュ化</div>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:20%;">比較観点</th>
+                        <th style="width:40%;">現行 RS-Base (2001年設計) の課題</th>
+                        <th style="width:40%;">RS-Next (新設計) での解決策</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>フォルダ階層構造</strong></td>
+                        <td><code>Imfidx2026\</code> 直下に1万数千個のサブフォルダがフラットに並び、NTFS/SMB列挙が劣化する。</td>
+                        <td><code>studies/YYYY/MM/DD/P{ID}_{MOD}_{HHMMSS}_{SEQ}/</code> の日付3階層パーティションにより、何十年経っても1日数十件で爆速。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>パス管理・移転性</strong></td>
+                        <td><code>gazou_tbl.folder</code> に <code>//192.168.1.164/D/...</code> がハードコードされ、ドライブ増設やIP変更が困難。</td>
+                        <td>DBには <code>volume_id</code>（例: <code>VOL_ACTIVE</code>）＋相対パス <code>rel_path</code> のみ保持。<code>server_config.json</code> 1箇所で移転完結。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>文字コード・検索</strong></td>
+                        <td><code>SHIFT_JIS</code> DB＋全カラム文字列型のため文字化けリスク・型不一致によるインデックス無効が発生。</td>
+                        <td>PostgreSQL 18 完全 <code>UTF-8</code> 正規化＋<code>pg_trgm</code> GINインデックスで漢字・カナ曖昧検索もミリ秒応答。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>原本の純粋性・自己修復</strong></td>
+                        <td>検査フォルダ内に <code>txt1RS/kensa.txt</code>・<code>small.jpg</code> 等が混在。</td>
+                        <td>サムネイル・波形JSONは <code>cache/</code> へ完全分離。原本フォルダには検査ファイル＋<code>study_meta.json</code> のみ格納し、DB全損時もディスク走査だけで100%復元可能。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>ID未入力・誤送信対策</strong></td>
+                        <td><code>D:\CR</code> 内で <code>~NoNumber.dcm</code> にリネームされ無言放置（実機で26件の未救済ファイルを確認）。</td>
+                        <td><code>quarantine_queue</code> へ自動保護し、Web一覧ヘッダーに「⚠️ 未紐付け画像あり」警告バッジを表示してワンクリック救済。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>装置追加・入替の柔軟性</strong></td>
+                        <td>Perlスクリプト（<code>convert.cgi</code> 等）の条件分岐を直接書き換える必要がありブラックボックス化。</td>
+                        <td><strong>Modality Studio</strong> によりブラウザ上からノーコードでプロファイル追加・検査名ルール変更・接続案内印刷が可能。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 3. 全体アーキテクチャ -->
+    <section class="card" id="sec-arch">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🏗️</span><span>3. RS-Next システム全体アーキテクチャ</span></div>
+        </div>
+
+        <div class="arch-diagram">
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#334155;">① 院内モダリティ（5種7台）＆ 外部連携</div>
+                <div class="arch-item"><strong>🔬 フジ内視鏡 ×2 (ELUXEO 8000)</strong>FTP送信 / <code>1280×1024</code> JPEG DICOM ➔ <code>ES_General</code></div>
+                <div class="arch-item"><strong>⭕ オリンパス内視鏡 ×1</strong>FTP / <code>1920×1080</code> FHD DICOM ➔ <code>内視鏡(D)</code></div>
+                <div class="arch-item"><strong>🩻 島津 X線撮影・透視 ×1</strong>DICOM C-STORE / 16bit <code>DX</code>・<code>RF</code> ➔ <code>胸部(D)</code> 等</div>
+                <div class="arch-item"><strong>🔊 エコー ARIETTA 65 ×1</strong>DICOM C-STORE / RGB <code>US</code> ➔ <code>US_Adult_Abd_</code></div>
+                <div class="arch-item"><strong>📈 フクダ電子 12誘導心電計 ×2</strong>TCP 1001 ➔ <code>FUKUDA_ECG\ORG</code> (<code>.ECG</code>) ➔ <code>心電図(D)</code></div>
+                <div class="arch-item"><strong>📋 MALL3 患者マスタCSV</strong>SMB共有 <code>DRS</code> / <code>DRS2</code> (CP932 21列 <code>kanja.txt</code>)</div>
+                <div class="arch-item"><strong>💿 他院紹介CD・デジカメ・PDF</strong>ブラウザ D&amp;D アップロード / HTTP API</div>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#0f766e;">② Python 自動取込 ＆ Modality Studio</div>
+                <div class="arch-item"><strong>内蔵FTPレシーバ (pyftpdlib)</strong>転送完了イベント即時処理・途中読込破損ゼロ</div>
+                <div class="arch-item"><strong>DICOM Storage SCP (pynetdicom)</strong>任意AEタイトル自動受理・C-ECHO・全圧縮構文対応</div>
+                <div class="arch-item"><strong>Modality Studio ルールエンジン</strong>DBプロファイル優先度照合＋未登録装置の自動指紋記録</div>
+                <div class="arch-item"><strong>先行レンダラ (dcm_render / ecg_render)</strong>着信時にJPEGサムネイル＆12誘導波形JSONを事前生成</div>
+                <div class="arch-item"><strong>重複排除 ＆ Quarantine 保護</strong><code>SOPInstanceUID</code> / <code>SHA-256</code> 検査＋不正ID自動隔離</div>
+            </div>
+
+            <div class="arch-arrow">➔</div>
+
+            <div class="arch-col">
+                <div class="arch-col-head" style="background:#1d4ed8;">③ ストレージ層 ＆ PHP8 Webスイート</div>
+                <div class="arch-item"><strong>非RAID マルチSSD階層ストレージ</strong><code>VOL_ARCHIVE(D:)</code> ＋ <code>VOL_ACTIVE(E:)</code> ＋ <code>F:/G:</code> ミラー</div>
+                <div class="arch-item"><strong>PostgreSQL 18 (完全 UTF-8 / 全7表)</strong><code>pg_trgm</code> 高速検索・論理削除・全操作監査ログ</div>
+                <div class="arch-item"><strong>ゼロインストール Webビューワ群</strong>一覧検索 / DICOMビューワ / 12誘導心電図 / タイムライン</div>
+                <div class="arch-item"><strong>臨床出力スイート</strong>A4 2×4印刷 / IMAPI2 CD直焼き / 胃がん検診JPEG一発保存</div>
+                <div class="arch-item"><strong>Web管理・救済・装置スタジオ</strong>所見編集・誤ID付替 / 隔離救済 / Modality Studio UI</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 4. リポジトリ構成・実装状況 -->
+    <section class="card" id="sec-repo">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📦</span><span>4. ワークスペース構成とモジュール一覧（<code>C:\Apache24\htdocs\rsnext\</code>）</span></div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:30%;">パス / ファイル名</th>
+                        <th style="width:12%;">ステータス</th>
+                        <th>役割・仕様概要</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>config/server_config.json</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>システム全体設定（DB接続、マルチSSDボリューム <code>VOL_ARCHIVE</code> / <code>VOL_ACTIVE</code>、FTP/DICOMポート、MALL3/ECG監視パス、旧サーバ移行元定義）。</td>
+                    </tr>
+                    <tr>
+                        <td><code>sql/001_schema.sql</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>PostgreSQL 18 完全 UTF-8 全7テーブル定義＋<code>pg_trgm</code> インデックス＋当院現行モダリティ5種7台・汎用プロファイル初期シードデータ。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ingest_service/common.py</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>DB接続、患者ID正規化・妥当性検証（<code>999999</code>互換・心電図<code>(D)</code>抽出・<code>DRS2</code> 9番台付与・誤読検知）、Modality Studio ルール評価＆自動検出レーダー記録エンジン。</td>
+                    </tr>
+                    <tr>
+                        <td><code>dcm_render.py</code> / <code>ecg_render.py</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>DICOM VOI LUT・16bit階調正規化JPEG変換エンジン、およびフクダ電子12誘導心電図（ハフマン復号＋計測値抽出）JSONパーサ。</td>
+                    </tr>
+                    <tr>
+                        <td><code>cd_dicomdir.py</code> / <code>cd_burn.ps1</code> / <code>cd_viewer_template.html</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>IHE PDI / DICOM Part 10 正規化 <code>DICOMDIR</code> ビルダー、医療法人小野会オリジナルオフラインHTMLビューワ、Windows標準 IMAPI2 ダイレクトCD/DVDライティングGUI。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ingest_service/study_filer.py</code><br><code>ftp_receiver.py</code> / <code>dicom_scp.py</code><br><code>fukuda_ecg_watcher.py</code> / <code>mall3_csv_watcher.py</code> / <code>run_all.py</code></td>
+                        <td><span class="status-done">実装・検証済</span></td>
+                        <td>常駐自動取込サービス本体（FTP受信・DICOM C-STORE/C-ECHO受信・心電図監視・MALL3 CSV UPSERT・階層ファイリング・先行キャッシュ生成・Quarantine隔離）。</td>
+                    </tr>
+                    <tr>
+                        <td><code>lib/bootstrap.php</code> / <code>db.php</code> / <code>storage.php</code><br><code>index.php</code> / <code>dicom_view.php</code> / <code>ecg_view.php</code><br><code>print_view.php</code> / <code>dcm_api.php</code> / <code>ecg_api.php</code> / <code>cd_export.php</code></td>
+                        <td><span class="status-done">実装・検証済</span></td>
+                        <td>UTF-8 DB＆マルチボリューム対応Webフロントエンド一式（高速一覧、ブラウザDICOM/心電図/PDFビューワ、2×4印刷、胃がん検診JPEG一発保存、検査CD作成）。</td>
+                    </tr>
+                    <tr>
+                        <td><code>modality_studio.php</code> / <code>modality_api.php</code><br><code>study_edit_api.php</code> / <code>import_media.php</code> / <code>ingest_dashboard.php</code></td>
+                        <td><span class="status-done">実装・検証済</span></td>
+                        <td>Modality Studio（装置管理・自動検出登録・業者案内シート・シミュレータ）、所見編集・患者ID付け替え・ゴミ箱、他院CD/PDF D&amp;D取込、受信モニター＆隔離救済画面。</td>
+                    </tr>
+                    <tr>
+                        <td><code>migration/migrate_from_rsbase.py</code><br><code>migration/rebuild_db_from_meta.py</code><br><code>tests/test_ingest_pipeline.py</code></td>
+                        <td><span class="status-done">実装・検証済</span></td>
+                        <td>現行 <code>192.168.1.164</code> 完全 Read-Only 無停止マイグレータ、<code>study_meta.json</code> からのDB自己修復ツール、および全5モダリティ＋MALL3＋隔離救済E2E自動検証スイート。</td>
+                    </tr>
+                    <tr>
+                        <td><code>server_setup/00_send_package_to_server.ps1</code><br><code>01_storage_and_cleanup.ps1</code><br><code>02_install_services_and_prod_config.ps1</code><br><code>config/server_config.production_2025.json</code></td>
+                        <td><span class="status-done">構築済</span></td>
+                        <td>Windows Server 2025（<code>192.168.1.163</code>）向けワンクリック転送・非RAID単体SSD整備（<code>D:〜G:</code>＋<code>H:</code>）・PostgreSQL 18 / Apache 2.4 / MWL常駐 / 自動ミラー一括構築キット。</td>
+                    </tr>
+                    <tr>
+                        <td><code>仕様書/*.html</code></td>
+                        <td><span class="status-done">本書一式</span></td>
+                        <td>RS-Next 統合技術仕様書ポータルおよび分野別詳細仕様書・実機構築手順書（全8ドキュメント）。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 医用画像ファイリングシステム 統合仕様書ポータル — おの肛門科胃腸科内視鏡クリニック（医療法人小野会）
+    </footer>
+
+</div>
+</body>
+</html>
+

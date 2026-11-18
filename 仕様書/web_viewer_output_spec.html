@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>④ Web閲覧・検査編集・2×4印刷・CD作成・JPEG出力仕様書 | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html" class="active">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ④</span>
+            <span class="badge badge-glass">Webブラウザ完結ビューワ</span>
+            <span class="badge badge-glass">旧 2000.cgi 完全脱却</span>
+            <span class="badge badge-glass">2×4印刷 / IMAPI2 CD直焼き / JPEG一発保存</span>
+        </div>
+        <h1>🖥️ ④ Web閲覧・検査編集・2×4印刷・CD作成・JPEG出力仕様書</h1>
+        <p>
+            現場の医師・スタッフが使い慣れた「RS-Base改」の軽快な操作感を100%継承しながら、クライアントPCへの常駐ソフト不要の「Webブラウザ完結表示」を標準化し、さらに所見編集・誤ID付け替え・他院CD取込・隔離救済までブラウザ1つに統合するフロントエンド＆出力仕様書です。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 目次:</strong>
+        <a href="#sec-index">1. 検査一覧・検索UI (index.php)</a>
+        <a href="#sec-viewers">2. Web DICOM / 12誘導心電図 / タイムライン</a>
+        <a href="#sec-edit">3. 検査編集・誤ID付替・他院CD取込・隔離救済</a>
+        <a href="#sec-print">4. 2×4 A4印刷 ＆ 胃がん検診JPEG一発保存</a>
+        <a href="#sec-cd">5. PDI準拠 DICOMDIR ＆ IMAPI2 検査CD作成</a>
+    </div>
+
+    <!-- 1. 検査一覧・検索UI -->
+    <section class="card" id="sec-index">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📋</span><span>1. 高速検査一覧 ＆ マルチ検索UI（<code>index.php</code>）</span></div>
+        </div>
+        <p>
+            <code>SHIFT_JIS</code> 変換の廃止と PostgreSQL <code>pg_trgm</code> インデックス＋先行サムネイルキャッシュにより、19万件超の全期間データからでもミリ秒単位で検索・一覧描画を行います。
+        </p>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:18%;">UI要素 / カラム</th>
+                        <th>クリック・操作時の動作仕様</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>ヘッダー警告バッジ</strong><br><code>⚠️ 未紐付け画像 N件</code></td>
+                        <td><code>quarantine_queue</code> に <code>PENDING</code> データが存在する時のみアンバー点滅バッジを表示。クリックで救済画面（<code>ingest_dashboard.php</code>）へ直行し、ID打ち忘れ画像の取りこぼしをゼロにします。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>検索・絞り込みバー</strong></td>
+                        <td>日付ピッカー（当日ワンクリック復帰付）、患者ID・漢字・フリガナ横断インクリメンタル検索、モダリティカテゴリ別トグル（すべて / 内視鏡 / X線・透視 / エコー / 心電図 / 外部・レポート）、五十音頭文字フィルタ。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>① 検査番号（連番）</strong></td>
+                        <td>旧 <code>2000.cgi</code> の代わりに<strong>「検査情報編集・ID付け替えモーダル」</strong>をページ遷移なしで即時表示（旧データの <code>legacy_renban</code> も併記検索可能）。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>② 検査名バッジ</strong></td>
+                        <td><code>modality_profiles</code> で設定されたアイコン・バッジ色で表示。クリック時、<code>primary_file_type</code> に応じて <strong>Web DICOMビューワ</strong> / <strong>Web 12誘導心電図ビューワ</strong> / <strong>PDF・画像ビューワ</strong> を即起動（<code>?mode=jpeg</code> 時は胃がん検診JPEG出力を起動）。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>③ 検査ID</strong></td>
+                        <td><code>server_config.json</code> の <code>karte_url_template</code> に基づき、院内電子カルテ（<code>karteview.php</code>）の該当患者画面を別タブで展開。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>④ 患者氏名（漢字/カナ）</strong></td>
+                        <td>クリックで当該患者の過去全検査（2000年〜現在、<code>VOL_ARCHIVE</code>＋<code>VOL_ACTIVE</code> 横断）の時系列一覧＋2×4印刷・検査CD作成ボタンバーを展開。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>⑤ 年齢 / 性別</strong></td>
+                        <td>通常診察時は誤操作防止のためクリック無反応。<strong>「📷 胃がん検診モード（<code>?mode=jpeg</code>）」選択時のみ <code>📷 年齢</code> バッジへ変化</strong>し、1クリックで直接フォルダ保存モーダルを起動。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>⑥ 所見・コメント</strong></td>
+                        <td><code>studies.findings</code> を一覧上で直接視認可能。鉛筆アイコンクリックでその場でインライン追記・保存にも対応。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. Web完結ビューワ群 -->
+    <section class="card" id="sec-viewers">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔍</span><span>2. ゼロインストール Web完結ビューワ群（DICOM / 心電図 / キャンバス）</span></div>
+        </div>
+        <div class="grid-3">
+            <div class="sub-card">
+                <h4>🖼️ Web DICOMビューワ<br><small><code>dicom_view.php</code></small></h4>
+                <ul style="margin-bottom:0;">
+                    <li>着信時に先行生成済みの高画質JPEGキャッシュを読み込むため<strong>初回表示待ち0秒</strong>。</li>
+                    <li>マウスホイール高速スライス送り、ズーム・パン、輝度/コントラスト（WL/WW風調整）、2画面比較表示、IEE疑似特殊光強調、2×4印刷トレイへのワンクリック追加を搭載。</li>
+                </ul>
+            </div>
+            <div class="sub-card">
+                <h4>📈 Web 12誘導心電図ビューワ<br><small><code>ecg_view.php</code></small></h4>
+                <ul style="margin-bottom:0;">
+                    <li><code>FEV-05.exe</code> 無しでブラウザの HTML5 Canvas / SVG 上に医療用ミリ方眼紙（25mm/s・10mm/mV、50mm/s・20mm/mV 切替）と鮮明な12誘導波形を描画。</li>
+                    <li>HR・RR・PR・QRS・QT・QTcB・QTcF・電気軸の自動計測値パネルおよびA4クリーン波形印刷に対応。</li>
+                </ul>
+            </div>
+            <div class="sub-card">
+                <h4>🗺️ 外部連携キャンバスビュー<br><small><code>canvas_view.php</code></small></h4>
+                <ul style="margin-bottom:0;">
+                    <li>電子カルテや内視鏡予約システムから <code>?patient_id=XXX&amp;limit=6</code> 等で呼び出せるサマリーグリッドAPI・埋め込み画面。</li>
+                    <li>1行3件折り返しカード表示・本日受診検査のハイライト強調を現行RS-Base改と完全互換で提供。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. 管理・編集・取込・救済UI -->
+    <section class="card" id="sec-edit">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🛠️</span><span>3. 新規Web管理スイート（旧 Perl CGI・バッチ手作業の完全廃止）</span></div>
+            <span class="status-core">RS-Next 新規機能</span>
+        </div>
+
+        <div class="grid-2">
+            <div class="sub-card">
+                <h4>✏️ ① 検査編集・誤患者ID付け替え・ゴミ箱（<code>study_edit_api.php</code>）</h4>
+                <ul>
+                    <li><strong>所見・施行医・検査名編集</strong>: DBの <code>studies</code> とディスク上の <code>study_meta.json</code> を同時にアトミック更新。</li>
+                    <li><strong>誤患者IDの安全な付け替え</strong>: 内視鏡やX線で誤って別患者のIDで撮影してしまった際、移動先の患者IDを入力すると氏名・生年月日を確認表示した上で1クリック付け替え。変更履歴はすべて <code>ingest_logs</code> に記録されます。</li>
+                    <li><strong>ゴミ箱（論理削除）＆ 1クリック復元</strong>: テスト撮影等の不要検査を安全に非表示化し、誤削除時もゴミ箱一覧から即座に元へ戻せます。</li>
+                </ul>
+            </div>
+            <div class="sub-card">
+                <h4>💿 ② 他院紹介CD・カメラ・PDF D&amp;D取込（<code>import_media.php</code>）</h4>
+                <ul>
+                    <li>近森病院等の紹介状添付CD/DVDをドライブに入れ、フォルダ丸ごと（または個別DICOM / JPEG / PDFレポート）をブラウザ枠へドラッグ＆ドロップするだけで取込完了。</li>
+                    <li>DICOMヘッダの患者名と院内 <code>patients</code> マスタの照合チェックを行い、他患者への誤登録を防止します。</li>
+                    <li>従来の複雑なバッチファイル手作業（<code>192_168_1_xxx.bat</code>）は完全に不要となります。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- 4. 2x4印刷 & 胃がん検診JPEG -->
+    <section class="card" id="sec-print">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🖨️</span><span>4. A4縦 2×4 検査横断印刷 ＆ 胃がん検診 JPEG一発保存</span></div>
+        </div>
+
+        <div class="sub-title">🖨️ 2×4 最大化印刷システム（<code>print_view.php</code>）</div>
+        <ul>
+            <li><strong>余白4.5mm極小化レイアウト</strong>: A4縦1枚に2列×4行（最大8画像）を隙間なく配置し、内視鏡の微細血管・表面構造の視認性を最大化。</li>
+            <li><strong>オリンパス自動「O社サークルフィット」連動</strong>: <code>modality_profiles.viewer_options.olympus_circle_fit == true</code>（または1920×1080内視鏡画像）を自動検知し、左側の患者文字情報帯をマスクして八角形・円形観察領域を枠いっぱいに自動トリミング（<code>⭕ O社⇄</code> ボタンで全体表示と1クリック切替可能）。</li>
+            <li><strong>同一画像の複製対比 ＆ IEE病巣強調</strong>: <code>📋 複製</code> ボタンで同じ画像を隣のスロットへ複製し、「左：通常光全体像 ／ 右：病変部拡大＋NBI/LCI/TXI/インジゴ強調」の対比サマリーを数秒で作成可能。患者別 <code>LocalStorage</code> 分離により他患者画像の混入を完全防止。</li>
+        </ul>
+
+        <div class="sub-title">📷 胃がん検診 DICOM➔JPEG 一発フォルダ保存 ＆ ZIP出力（<code>dcm_api.php</code>）</div>
+        <ul>
+            <li><strong>一発フォルダ保存（<code>action=save_folder</code>）</strong>: <code>?mode=jpeg</code> 時に年齢バッジをクリックしサブフォルダ名を入力して Enter を押すだけで、指定親フォルダ（初期値 <code>C:\Users\Owner\Desktop\jpeg</code>）配下に高品質JPEG一式を約0.1〜0.3秒で直接生成。</li>
+            <li><strong>全端末対応ZIPダウンロード（<code>action=zip</code>）</strong>: 院内のどの端末からでもワンクリックでサブフォルダ付きZIPをダウンロード可能。</li>
+        </ul>
+    </section>
+
+    <!-- 5. 検査CD作成スイート -->
+    <section class="card" id="sec-cd">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>💿</span><span>5. 紹介先提出用 検査CD/DVD ダイレクト作成システム</span></div>
+            <span class="status-done">コアツール構築済</span>
+        </div>
+        <p>
+            患者の複数検査（DICOM画像＋フクダ12誘導心電図）を選択し、<strong>「①他院PACSへ100%取り込める標準 <code>DICOMDIR</code>」</strong>と<strong>「②PACSがない紹介先や患者宅PCでもブラウザだけで高精細閲覧できる『医療法人小野会 オリジナルビューワー（<code>index.html</code>）』」</strong>を1枚のCD-Rへダイレクトに書き込む統合パッケージです。
+        </p>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:28%;">構成ファイル</th>
+                        <th>実装済み仕様・役割</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>cd_dicomdir.py</code><br><span class="status-done">構築済</span></td>
+                        <td>
+                            Part 10ヘッダ欠損や必須タグ（<code>StudyTime</code>, <code>StudyID</code>, <code>TransferSyntaxUID</code>, <code>SOPClassUID</code> 等）が空の内視鏡DICOMも <code>prepare_part10_dicom()</code> で規格準拠に自動補完し、<code>pydicom.fileset.FileSet</code> で IHE PDI 準拠の <code>DICOMDIR</code> + <code>PT000000/ST.../SE.../IM...</code> 階層を生成。心電図原本も <code>RAW_ECG/</code> へ同時保全します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>cd_viewer_template.html</code><br><span class="status-done">構築済</span></td>
+                        <td>
+                            外部通信一切不要（完全オフライン単一HTML）で動作する「医療法人小野会 オリジナルビューワー」。2画面比較、ズーム・パン、IEE強調フィルタ、および12誘導心電図のインタラクティブ波形描画を1ファイルに内蔵。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>cd_burn.ps1</code><br><span class="status-done">構築済</span></td>
+                        <td>
+                            Windows標準搭載 COM（<code>IMAPI2.MsftDiscFormat2Data</code> / <code>IMAPI2FS.MsftFileSystemImage</code>）を用いたライティングソフト不要の専用GUIツール。HTTP ZIP取得またはローカル直コピーに対応し、<code>FileSystemsToCreate = 3</code>（<strong>ISO9660 + Joliet ハイブリッド</strong>）かつ追記不可クローズ（<code>ForceMediaToBeClosed = $true</code>）で書き込むため、どの大病院のPACS端末でも100%確実に読み取れます。完了後の自動トレイ排出・一時データの完全消去機能付き。
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ④ Web閲覧・検査編集・2×4印刷・CD作成・JPEG出力仕様書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+

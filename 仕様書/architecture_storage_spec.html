@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>① インフラ・非RAIDマルチSSD・ディレクトリ仕様書 | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html" class="active">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html">⑤ 3.17TB移行・BCP運用</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ①</span>
+            <span class="badge badge-glass">Windows Server 2025</span>
+            <span class="badge badge-glass">非RAID 単体NTFS マルチSSD設計</span>
+        </div>
+        <h1>🏗️ ① インフラ・非RAIDマルチSSD・ディレクトリ構造仕様書</h1>
+        <p>
+            ハードウェアRAIDコントローラ障害やリビルド崩壊によるデータ消失リスクを根本排除し、院内管理者でもWindows標準操作のみで1分以内に障害復旧できる「非RAID単体NTFS マルチSSD構成」、日付3階層ストレージ構造、および <code>config/server_config.json</code> の完全仕様を定義します。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 目次:</strong>
+        <a href="#sec-net">1. ネットワーク・ポート構成</a>
+        <a href="#sec-ssd">2. 非RAID 4TB SSD×4 ＋ 8TB HDD 設計</a>
+        <a href="#sec-layout">3. 階層ディレクトリ ＆ study_meta.json</a>
+        <a href="#sec-config">4. server_config.json 全項目定義</a>
+    </div>
+
+    <!-- 1. ネットワーク・ポート構成 -->
+    <section class="card" id="sec-net">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🌐</span><span>1. ネットワーク・待ち受けポート構成（開発環境 vs 本番環境）</span></div>
+        </div>
+        <p>
+            開発・リハーサル環境（現行PC <code>192.168.1.111</code>）では既存サービスと競合しない高番ポートで検証し、Windows Server 2025 本番切替時には旧サーバと完全同一のIP（<code>192.168.1.164</code>）および標準ポートで待ち受けることで、<strong>院内全7台のモダリティおよびMALL3側の設定変更を完全にゼロ</strong>にします。
+        </p>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>通信チャネル</th>
+                        <th>対象装置・連携元</th>
+                        <th>開発・検証設定 (<code>192.168.1.111</code>)</th>
+                        <th>本番 Windows Server 2025 (<code>192.168.1.164</code>)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Web フロント / API</strong></td>
+                        <td>診察室PC・処置室・受付端末・電子カルテ連携</td>
+                        <td><code>http://192.168.1.111/rsnext/</code> (TCP 80)</td>
+                        <td><code>http://192.168.1.164/rsnext/</code>（または <code>/rsbase/</code> エイリアス互換）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>FTP 着信サーバ</strong></td>
+                        <td>フジ内視鏡×2 (ELUXEO 8000)<br>オリンパス内視鏡×1 (MV3C)</td>
+                        <td>TCP <code>2121</code><br>User: <code>esuser</code> / Anonymous許可</td>
+                        <td>TCP <strong><code>21</code></strong>（旧 <code>ES Server</code> 互換バナー・認証完全一致）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>DICOM Storage SCP</strong></td>
+                        <td>島津X線・透視 (<code>SHIMADZU-PC</code>)<br>エコー (<code>ARIETTA 65</code>)</td>
+                        <td>TCP <code>11104</code><br><code>promiscuous_ae_title: true</code></td>
+                        <td>TCP <strong><code>104</code></strong>（<strong>任意の Calling / Called AE Title を無条件自動受理</strong>）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>フクダ心電計受信</strong></td>
+                        <td>フクダ電子 12誘導心電計 ×2台</td>
+                        <td><code>storage_data/inbox/fukuda_ecg</code> 監視</td>
+                        <td>TCP <strong><code>1001</code></strong>（フクダ電子LAN接続処理）➔ <code>C:\FUKUDA_ECG\ORG</code> リアルタイム監視</td>
+                    </tr>
+                    <tr>
+                        <td><strong>MALL3 患者CSV共有</strong></td>
+                        <td>MALL3 レセコン / 電子カルテ (<code>192.168.1.16</code> 等)</td>
+                        <td><code>storage_data/inbox/drs</code> ＆ <code>drs2</code> 監視</td>
+                        <td>SMB (TCP <strong><code>445</code></strong>) 共有名 <code>\\192.168.1.164\DRS</code> および <code>\DRS2</code> (<code>C:\DRS</code>, <code>C:\DRS2</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>電子カルテ逆連携</strong></td>
+                        <td>Web一覧の「検査ID」クリック時遷移先</td>
+                        <td colspan="2"><code>http://192.168.1.16/karte/karteview.php?ID={patient_id}</code>（<code>server_config.json</code> で変更可）</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. 非RAID マルチSSD構成 -->
+    <section class="card" id="sec-ssd">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>💾</span><span>2. 非RAID 単体NTFS「4TB SSD × 4本 ＋ 8TB HDD」最適配置設計</span></div>
+            <span class="badge badge-teal">1分フェイルオーバー対応</span>
+        </div>
+
+        <div class="alert alert-warn">
+            <div class="alert-title">💡 なぜハードウェアRAID / 記憶域スペースを組まないのか？</div>
+            クリニック内運用においてRAIDカード故障やストライプ破損が発生すると、単体ディスクを別PCに繋いでも中身を読めず専門業者待ちで診療停止に陥ります。RS-Nextではすべてのドライブを<strong>「どのWindows PCにUSB接続してもそのままエクスプローラで読める標準単体NTFS」</strong>とし、アプリケーション層の <code>volume_id</code> 管理と <code>robocopy /MIR</code> ミラーリングを組み合わせることで、安全性と素人保守性を両立します。
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:14%;">ドライブ</th>
+                        <th style="width:20%;">物理デバイス</th>
+                        <th style="width:18%;">RS-Next ボリュームID</th>
+                        <th>格納対象・容量見込み・障害時役割</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong><code>C:</code></strong></td>
+                        <td>OS用 NVMe SSD</td>
+                        <td>システム・キャッシュ</td>
+                        <td>Windows Server 2025、PostgreSQL 18 (<code>rsnext_db</code>)、Apache + PHP 8、Python Ingest常駐サービス、高速サムネイル/波形キャッシュ (<code>cache/</code>)、着信ステージング (<code>inbox/</code>)、隔離領域 (<code>quarantine/</code>)。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>D:</code></strong></td>
+                        <td>4TB SSD #1</td>
+                        <td><code>VOL_ARCHIVE</code></td>
+                        <td><strong>過去アーカイブ領域（2000年〜2021年）</strong>: 旧サーバ移行データのうち2021年以前（約2.2TB）を収容。新規書込は発生せず事実上イミュータブル（読み取り中心）となるためSSD寿命も半永久的。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>E:</code></strong></td>
+                        <td>4TB SSD #2</td>
+                        <td><code>VOL_ACTIVE</code></td>
+                        <td><strong>現役データ領域（2022年〜現在＋今後の新規着信）</strong>: 移行直後は約1.0TBのみ使用し、<strong>残り約3.0TBの余裕（今後約8〜10年分）</strong>を確保。将来満杯になっても <code>VOL_ACTIVE_2</code> を設定1行で追加可能。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>F:</code></strong></td>
+                        <td>4TB SSD #3</td>
+                        <td><code>mirror_archive_f</code></td>
+                        <td><strong><code>D:</code> (VOL_ARCHIVE) の完全同期ホットスタンバイミラー</strong>: タスクスケジューラの <code>robocopy D:\ E_MIR... /MIR</code> により同一ディレクトリ構造を保持。<code>D:</code> 故障時はドライブ文字を <code>F:</code>➔<code>D:</code> に変えるだけで1分復旧。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>G:</code></strong></td>
+                        <td>4TB SSD #4</td>
+                        <td><code>mirror_active_g</code></td>
+                        <td><strong><code>E:</code> (VOL_ACTIVE) の日次/準リアルタイム同期ミラー</strong>: <code>robocopy E:\ G:\ /MIR</code> で常時待機。診療中に <code>E:</code> が突然死しても、ディスク管理で <code>G:</code> を <code>E:</code> に変更するだけで即座に診療再開可能。</td>
+                    </tr>
+                    <tr>
+                        <td><strong><code>H:</code></strong></td>
+                        <td>8TB 大容量 HDD</td>
+                        <td><code>backup_hdd_8tb</code></td>
+                        <td><strong>3重防御・世代バックアップ保管庫</strong>: 毎晩深夜に <code>D:</code>＋<code>E:</code> 差分バックアップおよび PostgreSQL <code>pg_dump</code> 圧縮ダンプ（30世代ローテーション）を保存し、誤消去やランサムウェアにも備えます。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 3. 階層ディレクトリ & study_meta.json -->
+    <section class="card" id="sec-layout">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📂</span><span>3. ディレクトリ階層ルールと自己記述 <code>study_meta.json</code> 仕様</span></div>
+        </div>
+
+        <p>
+            各ボリューム直下の <code>studies/</code> 配下は、検査日に基づく <code>YYYY/MM/DD</code> の3階層パーティションで整理します。1フォルダ内に1万件以上が並んでいた旧 <code>ImfidxYYYY</code> のボトルネックを解消し、1日あたり数十フォルダの極小リストに保つことでNTFSインデックス性能を最大化します。
+        </p>
+
+        <pre><code>&lt;VOLUME_ROOT&gt;/                                    # 例: E:\rsnext_active (VOL_ACTIVE)
+└── studies/
+    └── 2026/
+        └── 11/
+            └── 17/
+                ├── P00070755_ES_091522_01/       # 命名規則: P{8桁0埋め患者ID}_{Modality}_{HHMMSS}_{2桁連番}
+                │   ├── 0001.dcm                  # 4桁連番 (rsview.exe 等からも順序通り直接開けるクリーン命名)
+                │   ├── 0002.dcm
+                │   ├── ...
+                │   └── study_meta.json           # UTF-8 自己記述メタデータ (アトミック書込)
+                ├── P00082751_DX_100418_01/
+                │   ├── 0001.dcm
+                │   └── study_meta.json
+                └── P00083003_ECG_112312_01/
+                    ├── 0001.ECG                  # フクダ電子原本バイナリ (FEV-05.exe 完全互換)
+                    └── study_meta.json
+
+&lt;CACHE_ROOT&gt;/                                     # 例: C:\rsnext\storage_data\cache (いつでも破棄・再生成可能)
+├── thumbs/
+│   └── {study_id}/
+│       ├── 0001_thumb.jpg                        # 一覧・フィルムストリップ用 (長辺 200px, Lanczos)
+│       └── 0001_view.jpg                         # Webビューワ即時表示用フルサイズJPEG (Quality 88)
+└── ecg_json/
+    └── {study_id}/
+        └── 0001.json                             # ecg_render.py 解析済 12誘導波形配列＋計測値JSON</code></pre>
+
+        <div class="sub-title">自己修復用メタデータ <code>study_meta.json</code> フォーマット仕様</div>
+        <p>
+            検査取り込み時、およびWeb管理画面での「所見編集」「患者ID付け替え」実行時には、<code>ingest_service/common.py</code> の <code>atomic_write_json()</code>（一時ファイル書込➔<code>os.replace</code>）を用いて <code>study_meta.json</code> を同時更新します。これにより、万一DBサーバが初期化されてもストレージ走査のみでDBを100%再構築できます。
+        </p>
+        <pre><code>{
+  "schema_version": 1,
+  "study_id": 193823,
+  "legacy_renban": null,
+  "patient_id": "70755",
+  "study_date": "2026-11-17",
+  "study_time": "09:15:22",
+  "modality": "ES",
+  "kensamei": "ES_General",
+  "display_category": "endoscopy",
+  "profile_code": "FUJI_ENDO_EP8000",
+  "station_name": "MV3C",
+  "manufacturer": "FUJIFILM Corporation",
+  "model_name": "EP-8000",
+  "doctor": "",
+  "department": "内視鏡科",
+  "findings": "胃角部小弯に発赤調陥凹性病変あり。生検2個採取。",
+  "comment": "",
+  "study_instance_uid": "1.2.392.200036.9125.2.123456789",
+  "files": [
+    {
+      "seq_no": 1,
+      "filename": "0001.dcm",
+      "orig_filename": "IM000001.DCM",
+      "file_kind": "DICOM",
+      "sop_instance_uid": "1.2.392.200036.9125.4.987654321.1",
+      "sha256_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "width": 1280,
+      "height": 1024
+    }
+  ],
+  "updated_at": "2026-11-17T09:20:05+09:00"
+}</code></pre>
+    </section>
+
+    <!-- 4. server_config.json 全項目リファレンス -->
+    <section class="card" id="sec-config">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>⚙️</span><span>4. 設定ファイル <code>config/server_config.json</code> 全キー仕様</span></div>
+            <span class="status-done">構築済</span>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:32%;">JSON キーパス</th>
+                        <th style="width:14%;">型 / 既定値</th>
+                        <th>設定内容・本番切替時の変更指針</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>karte_url_template</code></td>
+                        <td>String</td>
+                        <td>一覧の患者IDクリック時に開く電子カルテURL。<code>{patient_id}</code> が正規化患者番号に置換されます。</td>
+                    </tr>
+                    <tr>
+                        <td><code>enable_legacy_local_viewer</code></td>
+                        <td>Boolean (<code>false</code>)</td>
+                        <td><code>false</code>（標準）では全端末Webビューワ完結。<code>true</code> にすると <code>watcher.vbs</code> 連携（<code>rsview.exe</code> / <code>FEV-05.exe</code> 直起動モード）も選択可能になります。</td>
+                    </tr>
+                    <tr>
+                        <td><code>jpeg_direct_export_default_dir</code></td>
+                        <td>String</td>
+                        <td>胃がん検診モード（<code>?mode=jpeg</code>）での一発JPEGフォルダ保存の初期出力先親フォルダ。</td>
+                    </tr>
+                    <tr>
+                        <td><code>db.host / port / dbname / user / password</code></td>
+                        <td>Object</td>
+                        <td>PostgreSQL 18 接続情報（<code>127.0.0.1:5432</code>, <code>rsnext_db</code>）。Python（<code>psycopg</code>）とPHP（<code>PDO pgsql</code>）双方が共通参照します。</td>
+                    </tr>
+                    <tr>
+                        <td><code>storage.active_volume_id</code></td>
+                        <td>String (<code>"VOL_ACTIVE"</code>)</td>
+                        <td>新規着信・Web取込データを書き込む現行アクティブボリュームのキー名。</td>
+                    </tr>
+                    <tr>
+                        <td><code>storage.archive_cutoff_year</code></td>
+                        <td>Integer (<code>2021</code>)</td>
+                        <td>旧RS-Baseデータ移行時の自動振分境界年。<code>2021</code> 年以前は <code>VOL_ARCHIVE</code>、<code>2022</code> 年以降は <code>VOL_ACTIVE</code> へ格納。</td>
+                    </tr>
+                    <tr>
+                        <td><code>storage.volumes.&lt;VOL_ID&gt;</code></td>
+                        <td>Object</td>
+                        <td>各ボリュームのローカル実体パス <code>path</code>、ミラー先 <code>mirror_path</code>、およびレガシービューワ併用時の <code>smb_share</code> UNCパスを定義。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ingest.ftp.port</code></td>
+                        <td>Integer</td>
+                        <td>開発環境 <code>2121</code> ／ Windows Server 2025 本番では <code>21</code> に設定。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ingest.dicom_scp.port / promiscuous_ae_title</code></td>
+                        <td>Integer / Boolean</td>
+                        <td>開発環境 <code>11104</code> ／ 本番 <code>104</code>。<code>promiscuous_ae_title: true</code> によりAEタイトル不一致エラーを100%防止。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ingest.mall3_csv.drs2_prefix_nine</code></td>
+                        <td>Boolean (<code>true</code>)</td>
+                        <td><code>DRS2\kanja.txt</code> 着信時、RS-Base互換の <code>9{5桁ゼロ埋めID}</code>（例: <code>123</code> ➔ <code>900123</code>）変換を自動適用。</td>
+                    </tr>
+                    <tr>
+                        <td><code>legacy_rsbase_source</code></td>
+                        <td>Object</td>
+                        <td>マイグレーションツールが Read-Only 参照する旧サーバ <code>192.168.1.164</code>（<code>gazouDB</code> および <code>public_html</code> 共有）の接続定義。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ① インフラ・非RAIDマルチSSD・ディレクトリ仕様書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⑤ 3.17TB 無停止データ移行・本番切替・BCP運用仕様書 | RS-Next</title>
+    <link rel="stylesheet" href="spec_common.css">
+</head>
+<body>
+<div class="container">
+
+    <nav class="top-nav">
+        <a href="index.html" class="top-nav-brand">🏥 RS-Next 統合仕様書ポータル</a>
+        <div class="top-nav-links">
+            <a href="index.html">🏠 総合トップ</a>
+            <a href="architecture_storage_spec.html">① インフラ・SSD保存構造</a>
+            <a href="db_schema_spec.html">② UTF-8 DB設計 (全7表)</a>
+            <a href="modality_studio_ingest_spec.html">③ Modality Studio・自動取込</a>
+            <a href="web_viewer_output_spec.html">④ Web閲覧・編集・印刷・CD</a>
+            <a href="migration_operation_spec.html" class="active">⑤ 3.17TB移行・BCP運用</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-badges">
+            <span class="badge badge-gold">仕様書 ⑤</span>
+            <span class="badge badge-glass">現行サーバ完全 Read-Only 移行</span>
+            <span class="badge badge-glass">切替停止 15〜30分以内</span>
+            <span class="badge badge-glass">SSD故障時 1分復旧 BCP</span>
+        </div>
+        <h1>🚚 ⑤ 3.17TB 無停止データ移行・本番切替・障害復旧（BCP）仕様書</h1>
+        <p>
+            稼働中の旧 RS-Base サーバ（<code>192.168.1.164</code>：検査 193,822件・患者 179,659名・実データ 3.17TB）に一切の負荷や変更を加えず、通常診療を続けながら新サーバへ段階コンバートし、休診時間のわずか15〜30分で安全に <code>192.168.1.164</code> を引き継ぐ手順および導入後のBCP（事業継続）手順を定義します。
+        </p>
+    </header>
+
+    <div class="toc-bar">
+        <strong>📌 目次:</strong>
+        <a href="#sec-mig-arch">1. 無停止マイグレータ仕様</a>
+        <a href="#sec-phases">2. 3フェーズ段階移行・切替タイムライン</a>
+        <a href="#sec-cutover">3. 本番カットオーバー当日チェックリスト</a>
+        <a href="#sec-backup">4. 自動ミラーリング・夜間バックアップ仕様</a>
+        <a href="#sec-bcp">5. 緊急時 1分復旧マニュアル（BCP）</a>
+    </div>
+
+    <!-- 1. 無停止マイグレータ仕様 -->
+    <section class="card" id="sec-mig-arch">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🔄</span><span>1. コンバートエンジン <code>migration/migrate_from_rsbase.py</code> 仕様</span></div>
+            <span class="badge badge-green">レジューム・差分同期対応</span>
+        </div>
+
+        <div class="alert alert-danger">
+            <div class="alert-title">⛔ 最重要安全原則：旧サーバ（192.168.1.164）に対する完全 Read-Only アクセス</div>
+            マイグレータは旧 <code>gazouDB</code> に対して <code>SELECT</code> クエリのみを発行し、共有フォルダ（<code>\\192.168.1.164\D\Users\rsn\public_html</code>）からも読み取りコピーのみを行います。旧サーバ側のファイルを移動・書換・削除することは一切ないため、万一切替当日に想定外の事象が起きても旧サーバで即座に100%通常診療を継続できます。
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:24%;">変換項目</th>
+                        <th>コンバート変換ルール詳細</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>患者マスタ変換</strong><br><code>name_tbl</code> ➔ <code>patients</code></td>
+                        <td>
+                            全179,659件の <code>SHIFT_JIS (CP932)</code> 文字列（外字・旧字体・半角カナ含む）をUTF-8へ無欠損変換。<code>kanja_yomi_norm</code>（全角カタカナ正規化列）を自動生成し、和暦/西暦混在の生年月日を <code>DATE</code> 型へパースして <code>UPSERT</code> します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>年度別マルチSSD自動振分</strong><br><code>archive_cutoff_year: 2021</code></td>
+                        <td>
+                            ・検査年 <strong><code>2000〜2021年</code></strong> ➔ <code>VOL_ARCHIVE</code>（本番 <code>D:</code> 4TB SSD #1 / 約2.2TB）へ配置<br>
+                            ・検査年 <strong><code>2022年〜現在</code></strong> ➔ <code>VOL_ACTIVE</code>（本番 <code>E:</code> 4TB SSD #2 / 約1.0TB）へ配置<br>
+                            これにより移行完了時点で <code>E:</code> ドライブに約3.0TB（今後8〜10年分）の空き容量が確保されます。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>旧連番・所見の完全継承</strong><br><code>gazou_tbl</code> ➔ <code>studies</code></td>
+                        <td>
+                            旧 <code>gazou_tbl.renban</code> を <code>studies.legacy_renban</code>（UNIQUE）に保持。すでに同一 <code>legacy_renban</code> が移行済みの場合は高速スキップするため、<strong>何度中断・再実行しても重複せず差分のみ追記</strong>できます。<code>sindan1〜sindan4</code>・<code>txt1RS/kensa.txt</code> 内の所見も統合して <code>findings</code> と <code>study_meta.json</code> に保存します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>実ファイルクリーン格納</strong><br><code>Imfidx*</code> / <code>ecg/*</code></td>
+                        <td>
+                            旧検査フォルダ内の純粋な検査データ（<code>*.dcm</code>, <code>*.jpg</code>, <code>*.ECG</code> 等）のみを抽出し、不要な旧管理ゴミファイル（<code>txt1RS</code>, <code>000.shoken</code>, 古い極小サムネイル）を除外したクリーンな連番構造＋新規高画質キャッシュへ再編成します。
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>放置未紐付けデータの救出</strong><br><code>D:\CR\~NoNumber*.dcm</code></td>
+                        <td>
+                            現行 <code>192.168.1.164</code> の <code>D:\CR</code> に2019〜2020年から放置されている26件のID未入力DICOMファイルも取りこぼさず新サーバの <code>quarantine_queue</code> へ保護回収し、Web画面上で確認・整理できるようにします。
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 2. 3フェーズ段階移行 -->
+    <section class="card" id="sec-phases">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>📅</span><span>2. 3フェーズ段階移行スケジュール（診療無停止）</span></div>
+        </div>
+
+        <div class="grid-3">
+            <div class="sub-card" style="border-top:4px solid #2563eb;">
+                <h4>Phase 1：事前一括バックグラウンド移行</h4>
+                <p><strong>実施タイミング:</strong> 通常診療日〜夜間（数日かけてOK）</p>
+                <p style="margin:0;">
+                    Windows Server 2025 新サーバに仮IP（例: <code>192.168.1.165</code>）を設定してLAN接続。ネットワーク帯域を圧迫しないようスループット制御付きで <code>migrate_from_rsbase.py</code> を実行し、過去26年分（3.17TB）の99.9%を事前コピー＆変換完了させます。
+                </p>
+            </div>
+            <div class="sub-card" style="border-top:4px solid #0d9488;">
+                <h4>Phase 2：並行リハーサル・疎通検証</h4>
+                <p><strong>実施タイミング:</strong> 切替前の昼休み・診療後</p>
+                <p style="margin:0;">
+                    診察室PCや管理者端末から仮IP（<code>http://192.168.1.165/rsnext/</code>）を実際に開き、過去画像の高速表示・12誘導心電図・2×4印刷・CD作成・JPEG出力を実データで確認。モダリティからのテスト送信（DICOM C-ECHO等）も事前チェックします。
+                </p>
+            </div>
+            <div class="sub-card" style="border-top:4px solid #059669;">
+                <h4>Phase 3：差分同期 ＆ IP引き継ぎ切替</h4>
+                <p><strong>実施タイミング:</strong> 休診日または午後休診（所要 15〜30分）</p>
+                <p style="margin:0;">
+                    Phase 1 以降に増えた直近数日分の検査・患者データ（数GB・数百件）のみを差分同期（約3〜5分）➔ 自動ベリファイ合格後、旧サーバを待機IPへ退避して新サーバへ <strong><code>192.168.1.164</code></strong> を付与し本稼働を開始します。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. カットオーバー当日手順 -->
+    <section class="card" id="sec-cutover">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>✅</span><span>3. 本番カットオーバー当日 実行手順チェックリスト</span></div>
+        </div>
+        <ol>
+            <li><strong>当日検査の終了確認</strong>: 内視鏡・X線・エコー・心電計からの送信が完了していることを確認する。</li>
+            <li><strong>最終差分マイグレーション実行</strong>: 新サーバで <code>python migration/migrate_from_rsbase.py --delta --verify</code> を実行し、<code>gazou_tbl</code> 最新 <code>renban</code> まで100%一致したことを確認する（約5分）。</li>
+            <li><strong>初回ミラー同期確認</strong>: 新サーバの <code>D:</code>➔<code>F:</code> および <code>E:</code>➔<code>G:</code> の <code>robocopy /MIR</code> が最新状態であることを確認する。</li>
+            <li><strong>旧サーバのIP退避（コールドスタンバイ化）</strong>: 旧サーバ（<code>192.168.1.164</code>）のIPを <code>192.168.1.169</code> 等へ変更（またはLANケーブルを抜線してそのまま電源温存）する。</li>
+            <li><strong>新サーバへの <code>192.168.1.164</code> 設定</strong>: Windows Server 2025 新サーバのNICに <code>192.168.1.164</code> を設定し、<code>ipconfig /flushdns</code> および ARP 更新を確認する。</li>
+            <li><strong>全チャネル着信ワンパス確認（約10分）</strong>:
+                <ul>
+                    <li>MALL3 からテスト患者更新出力 ➔ <code>DRS\kanja.txt</code> 着信・即時DB反映確認</li>
+                    <li>内視鏡（FTP Port 21）、X線・エコー（DICOM Port 104）、心電計（TCP Port 1001）の疎通確認</li>
+                    <li>診察室ブラウザから一覧表示・カルテ連携・Webビューワ表示を確認して切替完了！</li>
+                </ul>
+            </li>
+        </ol>
+    </section>
+
+    <!-- 4. 自動ミラー・バックアップ -->
+    <section class="card" id="sec-backup">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🛡️</span><span>4. 日次自動ミラーリング ＆ 8TB HDD 世代バックアップ仕様</span></div>
+        </div>
+        <p>Windows タスクスケジューラに登録する標準保守ジョブにより、人手ゼロで3重のデータ保護を維持します。</p>
+        <pre><code># 1. 現役SSD (E:) ➔ ミラー待機SSD (G:) 高速同期（1時間ごと、または昼・夜1日2回）
+robocopy "E:\rsnext_active" "G:\rsnext_active" /MIR /FFT /R:2 /W:3 /MT:16 /NP /LOG+:"C:\rsnext\logs\mirror_active.log"
+
+# 2. アーカイブSSD (D:) ➔ ミラー待機SSD (F:) 同期（週1回または更新時）
+robocopy "D:\rsnext_archive" "F:\rsnext_archive" /MIR /FFT /R:2 /W:3 /MT:16 /NP /LOG+:"C:\rsnext\logs\mirror_archive.log"
+
+# 3. 毎晩 23:00 PostgreSQL 18 完全圧縮ダンプ ＋ 8TB HDD (H:) への退避（30日世代保持）
+pg_dump -U postgres -Fc rsnext_db -f "H:\rsnext_backup\db_dumps\rsnext_db_%DATE:~0,4%%DATE:~5,2%%DATE:~8,2%.dump"
+robocopy "E:\rsnext_active" "H:\rsnext_backup\vol_active" /MIR /FFT /R:2 /W:3 /MT:8 /NP</code></pre>
+    </section>
+
+    <!-- 5. 緊急BCPマニュアル -->
+    <section class="card" id="sec-bcp">
+        <div class="sec-title">
+            <div class="sec-title-left"><span>🚑</span><span>5. 緊急時 障害復旧マニュアル（専門知識不要・1分復旧）</span></div>
+        </div>
+
+        <div class="grid-2">
+            <div class="sub-card" style="background:#fffbeb; border-color:#fcd34d;">
+                <h4>⚡ ケースA：現役データ用 SSD（<code>E:</code> または <code>D:</code>）が突然故障した場合</h4>
+                <ol style="margin-bottom:0;">
+                    <li>Windows スタートボタン右クリック ➔ <strong>［ディスクの管理］</strong> を開く。</li>
+                    <li>故障した <code>E:</code>（存在しない場合はスキップ）のドライブ文字を削除する。</li>
+                    <li>常時ミラー済みの <strong><code>G:</code> ドライブを右クリック ➔ ［ドライブ文字とパスの変更］➔ <code>E:</code> に変更</strong> する。</li>
+                    <li>これだけで（DB変更も設定変更も一切不要で）<strong>約1分で全画像の閲覧・新規着信がそのまま再開</strong>します。後日新しい4TB SSDを購入して空いた <code>G:</code> として挿すだけでミラー体制も復帰します。</li>
+                </ol>
+            </div>
+            <div class="sub-card" style="background:#eff6ff; border-color:#bfdbfe;">
+                <h4>🔄 ケースB：万一 PostgreSQL DB が破損・初期化された場合</h4>
+                <ol style="margin-bottom:0;">
+                    <li><strong>第1手段（夜間ダンプ復元＋当日分自動補完）</strong>: <code>H:\rsnext_backup\db_dumps\</code> の最新 <code>.dump</code> を <code>pg_restore</code> で戻し、当日着信分のみディスク走査スクリプトを実行。</li>
+                    <li><strong>第2手段（ダンプすら無い極限状態からの100%自己再構築）</strong>: 各検査フォルダ内の <code>study_meta.json</code> を全走査するリカバリスクリプトを実行するだけで、全検査履歴・患者ID・所見テキストまでDBへ自動復元されます。</li>
+                </ol>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        RS-Next 統合技術仕様書 ⑤ 3.17TB 無停止データ移行・本番切替・BCP運用仕様書 — <a href="index.html">ポータルへ戻る</a>
+    </footer>
+
+</div>
+</body>
+</html>
+
