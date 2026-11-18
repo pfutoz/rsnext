@@ -482,11 +482,12 @@ dz.addEventListener('drop', async e => {
             if (entry) entries.push(entry);
         }
         if (entries.length > 0) {
+            excludedJunkCount = 0;
             const collected = [];
             for (const ent of entries) {
                 await traverseFileTree(ent, '', collected);
             }
-            processRawCandidates(collected);
+            processRawCandidates(collected, true);
             return;
         }
     }
@@ -494,6 +495,20 @@ dz.addEventListener('drop', async e => {
         handleFileInput(e.dataTransfer.files, false);
     }
 });
+
+function normalizeCdRelPath(rawRel) {
+    let r = String(rawRel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const up = r.toUpperCase();
+    // ドライブ名やボリュームラベル (例: "AOC_MINI/DICOM/..." や "Q:/DICOM/...") が先頭に付いている場合 CDルート相対 "DICOM/..." に正規化
+    const dcmIdx = up.indexOf('/DICOM/');
+    if (dcmIdx !== -1) {
+        return r.slice(dcmIdx + 1);
+    }
+    if (up.endsWith('/DICOMDIR')) {
+        return 'DICOMDIR';
+    }
+    return r;
+}
 
 async function traverseFileTree(entry, prefix, outList) {
     if (entry.isFile) {
@@ -503,13 +518,14 @@ async function traverseFileTree(entry, prefix, outList) {
             outList.push({ file, relPath: rel });
         }
     } else if (entry.isDirectory) {
-        const dirNameLow = entry.name.toLowerCase();
+        const dirNameLow = (entry.name || '').toLowerCase();
         if (PDI_JUNK_DIRS.has(dirNameLow)) {
             excludedJunkCount += 1;
             return;
         }
         const reader = entry.createReader();
-        const nextPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
+        const cleanName = (entry.name || '').replace(/^\/+|\/+$/g, '');
+        const nextPrefix = prefix ? (cleanName ? `${prefix}/${cleanName}` : prefix) : cleanName;
         while (true) {
             const batch = await new Promise(res => reader.readEntries(res, () => res([])));
             if (!batch || batch.length === 0) break;
@@ -521,42 +537,33 @@ async function traverseFileTree(entry, prefix, outList) {
 }
 
 function handleFileInput(fileList, isFolderMode) {
+    excludedJunkCount = 0;
     const raw = [];
     for (const f of fileList) {
         let rel = (f.webkitRelativePath || f.name || '').replace(/\\/g, '/');
-        // webkitdirectory 先頭のルートフォルダ名 (例: "Q/" や "DICOM/") を正規化
         if (isFolderMode && rel.includes('/')) {
-            const segs = rel.split('/');
-            // もし2階層目が DICOMDIR や DICOM なら、先頭はドライブ/親フォルダ名なので除去してCDルート相対に揃える
+            const segs = rel.split('/').filter(Boolean);
             if (segs.length >= 2 && (segs[1].toUpperCase() === 'DICOMDIR' || segs[1].toUpperCase() === 'DICOM' || PDI_JUNK_DIRS.has(segs[1].toLowerCase()))) {
                 rel = segs.slice(1).join('/');
+            } else {
+                rel = segs.join('/');
             }
         }
         raw.push({ file: f, relPath: rel });
     }
-    processRawCandidates(raw);
+    processRawCandidates(raw, true);
 }
 
-async function processRawCandidates(candidates) {
+async function processRawCandidates(candidates, keepPriorJunkCount = false) {
     queuedItems = [];
     dicomdirFile = null;
     cdManifest = null;
-    excludedJunkCount = 0;
-
-    // まず CD構造 (DICOMDIR または DICOM/ フォルダ) が含まれているかチェック
-    let hasPdiStructure = false;
-    for (const c of candidates) {
-        const up = c.relPath.toUpperCase();
-        if (up === 'DICOMDIR' || up.endsWith('/DICOMDIR') || up.startsWith('DICOM/') || up.includes('/DICOM/')) {
-            hasPdiStructure = true;
-            break;
-        }
-    }
+    if (!keepPriorJunkCount) excludedJunkCount = 0;
 
     for (const c of candidates) {
-        const relNorm = c.relPath.replace(/^\/+/, '');
-        const segs = relNorm.split('/');
-        const baseLow = segs[segs.length - 1].toLowerCase();
+        const relNorm = normalizeCdRelPath(c.relPath);
+        const segs = relNorm.split('/').filter(Boolean);
+        const baseLow = (segs[segs.length - 1] || c.file.name).toLowerCase();
 
         if (baseLow === 'dicomdir') {
             dicomdirFile = c.file;
@@ -756,26 +763,36 @@ function getSelectedItemsForImport() {
         return queuedItems;
     }
     const chks = Array.from(document.querySelectorAll('.cd-study-chk'));
+    const checkedChks = chks.filter(c => c.checked);
+    if (checkedChks.length === 0) {
+        return [];
+    }
+    // 全検査にチェックが入っている場合はキュー内の全DICOMスライスをそのまま対象にする（ドライブ名・ラベル差の影響ゼロ）
+    if (checkedChks.length === cdManifest.studies.length) {
+        return queuedItems;
+    }
+
     const allowedRelSet = new Set();
-    let anyHasRelPaths = false;
-    chks.forEach(chk => {
-        if (!chk.checked) return;
+    const allowedSuffixes = [];
+    checkedChks.forEach(chk => {
         const st = cdManifest.studies[parseInt(chk.dataset.idx, 10)];
         if (st && Array.isArray(st.rel_paths) && st.rel_paths.length > 0) {
-            anyHasRelPaths = true;
-            st.rel_paths.forEach(rp => allowedRelSet.add(rp.replace(/\\/g, '/').toUpperCase()));
+            st.rel_paths.forEach(rp => {
+                const norm = rp.replace(/\\/g, '/').replace(/^\/+/, '').toUpperCase();
+                allowedRelSet.add(norm);
+                allowedSuffixes.push('/' + norm);
+            });
         }
     });
-    if (!anyHasRelPaths) {
-        return chks.some(c => c.checked) ? queuedItems : [];
+    if (allowedRelSet.size === 0) {
+        return queuedItems;
     }
-    return queuedItems.filter(it => {
-        const relUp = it.relPath.replace(/\\/g, '/').toUpperCase();
-        if (allowedRelSet.has(relUp)) return true;
-        // サブフォルダ選択 (例: Q:\DICOM を直接選んだ場合 "00000000/00000001" になるケース) にも対応
-        if (allowedRelSet.has('DICOM/' + relUp)) return true;
-        return false;
+    const matched = queuedItems.filter(it => {
+        const relUp = normalizeCdRelPath(it.relPath).toUpperCase();
+        if (allowedRelSet.has(relUp) || allowedRelSet.has('DICOM/' + relUp)) return true;
+        return allowedSuffixes.some(suf => relUp.endsWith(suf));
     });
+    return matched.length > 0 ? matched : queuedItems;
 }
 
 function updateActiveCountFromStudies() {
