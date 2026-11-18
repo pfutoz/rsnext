@@ -54,6 +54,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '')
     exit;
 }
 
+if (($_GET['action'] ?? '') === 'check_launch') {
+    header('Content-Type: application/json; charset=UTF-8');
+    $clientIp = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    if ($clientIp === '::1') $clientIp = '127.0.0.1';
+    $cleanup = !empty($_GET['cleanup']);
+    $consumed = rsnext_check_client_trigger_consumed('trigger', $clientIp, __DIR__ . '/tmp', $cleanup);
+    echo json_encode(['status' => 'success', 'consumed' => $consumed], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $enableLegacyLocal = !empty($cfg['enable_legacy_local_viewer']);
 $mode = (string)($_GET['mode'] ?? 'web'); // 'web' | 'jpeg' | 'custom'
 if (!in_array($mode, ['web', 'jpeg', 'custom'], true)) {
@@ -528,6 +538,7 @@ function build_query_url(array $overrides): string {
         <a href="hardware_monitor.php" class="rs-nav-link">🖥️ ハード監視</a>
         <a href="backup_manager.php" class="rs-nav-link">🛡️ バックアップ</a>
         <a href="cd_export.php<?= $patientId !== '' ? '?patient_id=' . rawurlencode($patientId) : '' ?>" class="rs-nav-link">💿 CD作成</a>
+        <a href="clear_cache.php" target="_blank" class="rs-nav-link" title="サーバー＆クライアント一時キャッシュ管理・強制クリア">🧹 キャッシュ</a>
         <a href="client_logs.php" target="_blank" class="rs-nav-link" title="192.168.1.16/rsbase 共通常駐モジュール稼働状況">🖥️ 常駐端末</a>
         <a href="仕様書/index.html" target="_blank" class="rs-nav-link">📚 仕様書</a>
     </nav>
@@ -963,11 +974,27 @@ function launchLocalRsViewer(studyId, folderPath, launchMode, toastMsg) {
     });
     fetch('index.php', { method: 'POST', body: fd })
         .then(r => r.json())
-        .then(d => {
-            if (d.status === 'success') {
-                showToast(toastMsg || '🚀 ローカル RSViewer を起動しています...');
-            } else {
+        .then(async d => {
+            if (d.status !== 'success') {
                 alert('ビューワ起動エラー: ' + (d.message || '不明なエラー'));
+                return;
+            }
+            showToast(toastMsg || '🚀 ローカル RSViewer を起動しています...');
+            let pickedUp = false;
+            for (let i = 0; i < 6; i++) {
+                await new Promise(res => setTimeout(res, 700));
+                try {
+                    const chk = await (await fetch(`index.php?action=check_launch&t=${Date.now()}`)).json();
+                    if (chk.consumed) {
+                        pickedUp = true;
+                        showToast('✅ クライアント受信完了 — DICOM転送＆RSViewerを起動しています...');
+                        break;
+                    }
+                } catch (_) {}
+            }
+            if (!pickedUp) {
+                fetch(`index.php?action=check_launch&cleanup=1&t=${Date.now()}`).catch(() => {});
+                alert('⚠️ このPCで常駐連携ツール (watcher.vbs) が応答しませんでした。\n\n初めて利用するPCまたは常駐停止中の場合は、画面上部の「🖥️ 常駐端末」または「RSBaseSetup.exe」を一度実行してください。');
             }
         })
         .catch(e => alert('通信エラー: ' + e.message));

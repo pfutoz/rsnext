@@ -1,7 +1,7 @@
-' --- watcher.vbs v2.4.0 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + Auto-Provision + Dual Polling) ---
+' --- watcher.vbs v2.4.1 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + Foreground Launch + Cache Clear) ---
 Option Explicit
 
-Const WATCHER_VERSION = "2.4.0"
+Const WATCHER_VERSION = "2.4.1"
 
 Dim objShell, objFSO, network, prodRoot, localRoot, prodHttpBase, rsnextHttpBase, localHttpBase
 Dim normalExePath, ecgExePath
@@ -609,6 +609,14 @@ Sub DispatchTriggerLine(rawLine, activeRootDir, viaChannel, smbState)
 
     If mName = "HTTP_DICOM" Then
         Call LaunchHttpDicomViewer(pLoad, activeRootDir, viaChannel, smbState)
+        On Error Goto 0
+        Exit Sub
+    ElseIf mName = "CLEAR_CACHE" Then
+        Dim clrPs1
+        clrPs1 = ResolveHttpLauncherPs1()
+        If Len(clrPs1) > 0 And objFSO.FileExists(clrPs1) Then
+            objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File """ & clrPs1 & """ -ClearCacheOnly", 0, False
+        End If
         On Error Goto 0
         Exit Sub
     End If

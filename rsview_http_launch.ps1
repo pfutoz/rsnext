@@ -2,7 +2,8 @@
     [string]$BundleUrl = "",
     [string]$CacheKey = "",
     [string]$ServerBase = "",
-    [switch]$ProvisionOnly
+    [switch]$ProvisionOnly,
+    [switch]$ClearCacheOnly
 )
 
 # ==============================================================================
@@ -333,7 +334,17 @@ function Purge-OldDicomCache {
     } catch {}
 }
 
-# 1. ProvisionOnly モード（セットアップ時・常駐起動時のサイレント事前配備）
+# 1. ProvisionOnly / ClearCacheOnly モード
+if ($ClearCacheOnly) {
+    try {
+        if (Test-Path -LiteralPath $script:cacheRoot) {
+            Get-ChildItem -LiteralPath $script:cacheRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Send-ClientLaunchReport "INFO" "CLIENT_CACHE_CLEARED" "クライアントローカルDICOMキャッシュ (C:\RSBASE\dicom_cache) をクリアしました" ""
+    } catch {}
+    exit 0
+}
+
 if ($ProvisionOnly) {
     [void](Ensure-LocalRSViewer $null)
     exit 0
@@ -407,7 +418,40 @@ try {
         throw "展開後のDICOMファイルが0件でした。"
     }
 
-    Start-Process -FilePath $script:viewerExe -ArgumentList @("""$studyCacheDir""") -WorkingDirectory $script:viewerDir
+    # SW_HIDE継承を完全に断ち切るため cmd.exe /c start "" 経由で通常ウィンドウ起動し、さらに最前面表示を保証
+    $existingPids = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+    $wsh = New-Object -ComObject WScript.Shell
+    $wsh.CurrentDirectory = $script:viewerDir
+    $launchCmd = 'cmd.exe /c start "" "' + $script:viewerExe + '" "' + $studyCacheDir + '"'
+    [void]$wsh.Run($launchCmd, 7, $false)
+
+    try {
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class RsViewWin32 {
+    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+}
+"@ -ErrorAction SilentlyContinue
+        for ($w = 0; $w -lt 12; $w++) {
+            Start-Sleep -Milliseconds 250
+            $cand = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Where-Object { $existingPids -notcontains $_.Id -and $_.MainWindowHandle -ne [IntPtr]::Zero })
+            if ($cand.Count -eq 0) {
+                $cand = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
+            }
+            if ($cand.Count -gt 0) {
+                $h = $cand[0].MainWindowHandle
+                if (-not [RsViewWin32]::IsWindowVisible($h)) {
+                    [void][RsViewWin32]::ShowWindowAsync($h, 9)
+                }
+                [void][RsViewWin32]::SetForegroundWindow($h)
+                break
+            }
+        }
+    } catch {}
+
     Send-ClientLaunchReport "INFO" "TRIGGER_OK" ("RSViewer をゼロSMB(HTTPキャッシュ)で起動しました (" + $sliceCount + " files)") ("mode=HTTP_DICOM | key=" + $safeKey + " | cached=" + $isCached + " | url=" + $BundleUrl)
     exit 0
 } catch {
