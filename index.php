@@ -544,6 +544,7 @@ function build_query_url(array $overrides): string {
         <a href="worklist.php<?= $patientId !== '' ? '?patient_id=' . rawurlencode($patientId) : '' ?>" class="rs-nav-link" style="background:rgba(16,185,129,0.22);border-color:rgba(52,211,153,0.5);">📋 撮影依頼・MWL</a>
         <a href="modality_studio.php" class="rs-nav-link">🎛️ Modality Studio</a>
         <a href="import_media.php<?= $patientId !== '' ? '?patient_id=' . rawurlencode($patientId) : '' ?>" class="rs-nav-link">💿 外部取込</a>
+        <a href="duplicate_studies.php<?= $patientId !== '' ? '?q=' . rawurlencode($patientId) : '' ?>" class="rs-nav-link" title="重複検査・二重送信・誤患者ID残骸の抽出と安全整理">🔍 重複抽出</a>
         <a href="ingest_dashboard.php" class="rs-nav-link">📡 受信監視</a>
         <a href="hardware_monitor.php" class="rs-nav-link">🖥️ ハード監視</a>
         <a href="backup_manager.php" class="rs-nav-link">🛡️ バックアップ</a>

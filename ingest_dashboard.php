@@ -82,6 +82,7 @@ $cfg = rsnext_config();
         <a href="worklist.php" class="rs-nav-link">📋 撮影依頼・MWL</a>
         <a href="modality_studio.php" class="rs-nav-link">🎛️ Modality Studio</a>
         <a href="import_media.php" class="rs-nav-link">💿 外部CD/画像取込</a>
+        <a href="duplicate_studies.php" class="rs-nav-link">🔍 重複抽出</a>
         <a href="ingest_dashboard.php" class="rs-nav-link active">📡 受信モニター</a>
         <a href="hardware_monitor.php" class="rs-nav-link">🖥️ ハード監視</a>
         <a href="backup_manager.php" class="rs-nav-link">🛡️ バックアップ</a>

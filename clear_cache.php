@@ -257,6 +257,7 @@ $stats = rsnext_collect_all_stats($categories, $tmpRoot);
     </div>
     <nav class="rs-nav">
         <a href="index.php" class="rs-nav-link">🖥️ 検査一覧へ戻る</a>
+        <a href="duplicate_studies.php" class="rs-nav-link">🔍 重複検査抽出</a>
         <a href="client_logs.php" class="rs-nav-link">🖥️ 常駐端末ログ</a>
         <a href="hardware_monitor.php" class="rs-nav-link">📊 ハード監視</a>
     </nav>
