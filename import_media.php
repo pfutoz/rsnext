@@ -933,7 +933,13 @@ async function executeBatchImport() {
 
             pTxt.textContent = `取り込み中... (${Math.min(processedCount + batch.length, targetItems.length)} / ${targetItems.length} ファイル)`;
             const res = await fetch('modality_api.php', { method: 'POST', body: fd });
-            const out = await res.json();
+            const rawTxt = await res.text();
+            let out;
+            try {
+                out = JSON.parse(rawTxt);
+            } catch (_) {
+                throw new Error(`サーバ応答解析エラー (HTTP ${res.status}): ` + rawTxt.slice(0, 200));
+            }
             if (out.status !== 'success') {
                 throw new Error(out.message || '取込エラーが発生しました');
             }

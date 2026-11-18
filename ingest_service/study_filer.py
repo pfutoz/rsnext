@@ -1135,14 +1135,17 @@ def rescue_quarantine_item(
 def main():
     """
     PHPフロントエンドから CLI JSON ブリッジとして呼び出せるエントリポイント。
-    Usage:
-      python -m ingest_service.study_filer simulate <filepath> [--meta-json <json_file>]
-      python -m ingest_service.study_filer batch_import <manifest_json_file>
-      python -m ingest_service.study_filer rescue <quarantine_id> <patient_id> [kensamei] [doctor]
-      python -m ingest_service.study_filer sync_meta <study_id>
+    Windows CP932 コンソールでの波ダッシュ(\\u301c)等の UnicodeEncodeError を完全防止するため、
+    UTF-8ストリーム再設定 ＆ JSON出力は ensure_ascii=True (7bit安全エスケープ) で出力する。
     """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     if len(sys.argv) < 3:
-        print(json.dumps({"status": "error", "message": "Insufficient arguments"}, ensure_ascii=False))
+        print(json.dumps({"status": "error", "message": "Insufficient arguments"}, ensure_ascii=True))
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -1154,7 +1157,7 @@ def main():
                 with open(sys.argv[4], "r", encoding="utf-8") as mf:
                     extra = json.load(mf)
             out = simulate_file_routing(fp, source_protocol=extra.get("source_protocol", "SIMULATOR"), extra_meta=extra)
-            print(json.dumps(out, ensure_ascii=False))
+            print(json.dumps(out, ensure_ascii=True))
             sys.exit(0)
 
         if cmd == "batch_import":
@@ -1233,7 +1236,7 @@ def main():
                 "results": results,
                 "non_dicom_study_id": forced_sid,
                 "study_ids": sorted(list(touched_study_ids)),
-            }, ensure_ascii=False))
+            }, ensure_ascii=True))
             sys.exit(0)
 
         if cmd == "rescue":
@@ -1242,7 +1245,7 @@ def main():
             kensa = sys.argv[4] if len(sys.argv) >= 5 and sys.argv[4] != "" else None
             doc = sys.argv[5] if len(sys.argv) >= 6 else ""
             out = rescue_quarantine_item(qid, pid, override_kensamei=kensa, doctor=doc)
-            print(json.dumps(out, ensure_ascii=False))
+            print(json.dumps(out, ensure_ascii=True))
             sys.exit(0)
 
         if cmd == "sync_meta":
@@ -1253,16 +1256,16 @@ def main():
                 sync_study_meta_json(conn, cfg, sid)
             finally:
                 conn.close()
-            print(json.dumps({"status": "success", "study_id": sid}, ensure_ascii=False))
+            print(json.dumps({"status": "success", "study_id": sid}, ensure_ascii=True))
             sys.exit(0)
 
-        print(json.dumps({"status": "error", "message": f"Unknown command: {cmd}"}, ensure_ascii=False))
+        print(json.dumps({"status": "error", "message": f"Unknown command: {cmd}"}, ensure_ascii=True))
         sys.exit(2)
     except Exception as e:
         print(
             json.dumps(
                 {"status": "error", "message": str(e), "trace": traceback.format_exc()},
-                ensure_ascii=False,
+                ensure_ascii=True,
             )
         )
         sys.exit(3)

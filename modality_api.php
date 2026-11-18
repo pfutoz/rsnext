@@ -7,6 +7,8 @@ declare(strict_types=1);
 
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
+@putenv('PYTHONUTF8=1');
+@putenv('PYTHONIOENCODING=utf-8');
 
 require_once __DIR__ . '/lib/bootstrap.php';
 
@@ -804,6 +806,10 @@ try {
     throw new RuntimeException('未対応のアクションです: ' . $action);
 } catch (Throwable $e) {
     http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    $msg = $e->getMessage();
+    if (!mb_check_encoding($msg, 'UTF-8')) {
+        $msg = mb_convert_encoding($msg, 'UTF-8', 'SJIS-win,CP932,UTF-8');
+    }
+    echo json_encode(['status' => 'error', 'message' => $msg], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
