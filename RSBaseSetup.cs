@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.IO.Compression;
 using System.Management;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -15,12 +16,12 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("RS-Base Client Setup")]
-[assembly: AssemblyDescription("医療法人小野会 RS-Base クライアント連携インストーラー (常駐監視・CD書込・自動更新・ログ診断)")]
+[assembly: AssemblyTitle("RS-Base / RS-Next Client Setup")]
+[assembly: AssemblyDescription("医療法人小野会 RS-Base / RS-Next 共通クライアント連携＆RSViewerインストーラー (ゼロSMB・HTTP連携・CD書込・自動更新)")]
 [assembly: AssemblyCompany("医療法人小野会 おの肛門科胃腸科内視鏡クリニック")]
-[assembly: AssemblyProduct("RS-Base Client Integration Installer")]
-[assembly: AssemblyVersion("2.2.2.0")]
-[assembly: AssemblyFileVersion("2.2.2.0")]
+[assembly: AssemblyProduct("RS-Base / RS-Next Client Integration Installer")]
+[assembly: AssemblyVersion("2.4.0.0")]
+[assembly: AssemblyFileVersion("2.4.0.0")]
 
 namespace RSBaseInstaller
 {
@@ -114,7 +115,7 @@ namespace RSBaseInstaller
             Font baseFont = new Font("Yu Gothic UI", 9.5f, FontStyle.Regular);
             this.Font = baseFont;
             this.AutoScaleMode = AutoScaleMode.Dpi;
-            this.Text = "RS-Base PC連携ツール セットアップ (v2.2.2)";
+            this.Text = "RS-Base / RS-Next 共通PC連携ツール セットアップ (v2.4.0)";
             this.ClientSize = new Size(560, 420);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -149,7 +150,7 @@ namespace RSBaseInstaller
 
             Label lblHeaderTitle = new Label
             {
-                Text = "🏥 RS-Base PC連携ツール セットアップ",
+                Text = "🏥 RS-Base / RS-Next 共通PC連携 セットアップ",
                 ForeColor = Color.White,
                 BackColor = Color.Transparent,
                 Font = new Font("Yu Gothic UI", 13f, FontStyle.Bold),
@@ -158,7 +159,7 @@ namespace RSBaseInstaller
             };
             Label lblHeaderSub = new Label
             {
-                Text = "医療法人小野会 おの肛門科胃腸科内視鏡クリニック ／ ビューワ起動・CD書込・自動診断ログ",
+                Text = "医療法人小野会 ／ ローカルRSViewer自動配備(共有不要)・CD書込・自動診断",
                 ForeColor = Color.FromArgb(209, 250, 229),
                 BackColor = Color.Transparent,
                 Font = new Font("Yu Gothic UI", 8.5f, FontStyle.Regular),
@@ -439,11 +440,16 @@ namespace RSBaseInstaller
             {
                 candidates.Add(opts.CustomServerUrl.TrimEnd('/'));
             }
+            candidates.Add("http://192.168.1.163/rsnext");
             candidates.Add("http://192.168.1.16/rsbase");
+            candidates.Add("http://127.0.0.1/rsnext");
             candidates.Add("http://127.0.0.1/rsbase");
 
             bool smbOk = Directory.Exists(@"\\192.168.1.16\htdocs\rsbase\tmp") || Directory.Exists(@"C:\Apache24\htdocs\rsbase\tmp");
-            bool rsViewOk = File.Exists(@"C:\RSBASE\RSB_public_html\RSViewer\rsview.exe");
+            string localViewerCheck = !string.IsNullOrEmpty(installedDir)
+                ? Path.Combine(installedDir, @"RSB_public_html\RSViewer\RSView.exe")
+                : @"C:\RSBASE\RSB_public_html\RSViewer\rsview.exe";
+            bool rsViewOk = File.Exists(localViewerCheck) || File.Exists(@"C:\RSBASE\RSB_public_html\RSViewer\rsview.exe");
             bool ecgOk = File.Exists(@"C:\RSBASE\RSB_public_html\denshi\FEV-05.exe");
             string deskTool = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), @"DicomTool\dicom_convert.py");
             bool jpegOk = File.Exists(deskTool) || File.Exists(@"C:\Users\Owner\Desktop\DicomTool\dicom_convert.py");
@@ -458,7 +464,7 @@ namespace RSBaseInstaller
                 { "hostname", Environment.MachineName },
                 { "username", Environment.UserName },
                 { "client_ips", GetLocalIPv4Csv() },
-                { "version", string.IsNullOrEmpty(version) ? "2.2.2" : version },
+                { "version", string.IsNullOrEmpty(version) ? "2.4.0" : version },
                 { "install_dir", installedDir ?? "" },
                 { "os_info", GetOsDescription() },
                 { "client_ts", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") },
@@ -482,15 +488,17 @@ namespace RSBaseInstaller
             }
             byte[] payloadBytes = Encoding.UTF8.GetBytes(postBody.ToString());
 
+            bool sentAny = false;
             foreach (string baseUrl in candidates)
             {
+                if (sentAny && baseUrl.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase)) continue;
                 try
                 {
                     HttpWebRequest req = (HttpWebRequest)WebRequest.Create(baseUrl + "/client_logs.php?action=report");
                     req.Method = "POST";
                     req.ContentType = "application/x-www-form-urlencoded; charset=UTF-8";
-                    req.Timeout = 3000;
-                    req.ReadWriteTimeout = 3000;
+                    req.Timeout = 2500;
+                    req.ReadWriteTimeout = 2500;
                     req.ContentLength = payloadBytes.Length;
                     using (Stream st = req.GetRequestStream())
                     {
@@ -498,7 +506,7 @@ namespace RSBaseInstaller
                     }
                     using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                     {
-                        if (resp.StatusCode == HttpStatusCode.OK) return;
+                        if (resp.StatusCode == HttpStatusCode.OK) sentAny = true;
                     }
                 }
                 catch { }
@@ -643,18 +651,21 @@ namespace RSBaseInstaller
                 stepLog("新規クライアント環境としてセットアップを開始します。");
             }
 
-            // Step 2: Fetch latest watcher.vbs & cd_burn.ps1
+            // Step 2: Fetch latest watcher.vbs, cd_burn.ps1, & rsview_http_launch.ps1
             List<string> httpCandidates = new List<string>();
             if (!string.IsNullOrWhiteSpace(opts.CustomServerUrl))
             {
                 httpCandidates.Add(opts.CustomServerUrl.TrimEnd('/'));
             }
+            httpCandidates.Add("http://192.168.1.163/rsnext");
             httpCandidates.Add("http://192.168.1.16/rsbase");
+            httpCandidates.Add("http://127.0.0.1/rsnext");
             httpCandidates.Add("http://127.0.0.1/rsbase");
 
             byte[] vbsBytes = null;
             byte[] ps1Bytes = null;
-            string resolvedVer = "2.2.2";
+            byte[] httpLaunchBytes = null;
+            string resolvedVer = "2.4.0";
             string usedSource = "";
             string bust = "?t=" + DateTime.UtcNow.Ticks;
 
@@ -662,7 +673,7 @@ namespace RSBaseInstaller
             {
                 try
                 {
-                    byte[] verRaw = TryHttpGetBytes(baseUrl + "/watcher_version.txt" + bust, 3000);
+                    byte[] verRaw = TryHttpGetBytes(baseUrl + "/watcher_version.txt" + bust, 2500);
                     if (verRaw == null || verRaw.Length == 0) continue;
                     string verTxt = Encoding.ASCII.GetString(verRaw).Trim();
                     if (verTxt.Length < 3 || verTxt.Length > 16 || !char.IsDigit(verTxt[0]) || verTxt.Contains("<")) continue;
@@ -673,6 +684,7 @@ namespace RSBaseInstaller
                     {
                         vbsBytes = candVbs;
                         ps1Bytes = candPs1;
+                        try { httpLaunchBytes = TryHttpGetBytes(baseUrl + "/rsview_http_launch.ps1" + bust, 5000); } catch { }
                         resolvedVer = verTxt;
                         usedSource = baseUrl;
                         stepLog("HTTPサーバー (" + baseUrl + ") から最新版 v" + resolvedVer + " を取得しました。");
@@ -685,10 +697,10 @@ namespace RSBaseInstaller
                 }
             }
 
-            // Fallback to SMB or local folder if HTTP had no watcher_version.txt yet
+            // Fallback to local or SMB folder if HTTP had no watcher_version.txt yet
             if (vbsBytes == null || ps1Bytes == null)
             {
-                string[] dirFallbacks = new[] { @"C:\Apache24\htdocs\rsbase", @"\\192.168.1.16\htdocs\rsbase" };
+                string[] dirFallbacks = new[] { @"C:\Apache24\htdocs\rsnext", @"C:\Apache24\htdocs\rsbase", @"\\192.168.1.16\htdocs\rsbase" };
                 foreach (string d in dirFallbacks)
                 {
                     try
@@ -699,10 +711,12 @@ namespace RSBaseInstaller
                         {
                             vbsBytes = File.ReadAllBytes(fv);
                             ps1Bytes = File.ReadAllBytes(fp);
+                            string fh = Path.Combine(d, "rsview_http_launch.ps1");
+                            if (File.Exists(fh)) httpLaunchBytes = File.ReadAllBytes(fh);
                             string fver = Path.Combine(d, "watcher_version.txt");
                             if (File.Exists(fver)) resolvedVer = File.ReadAllText(fver, Encoding.ASCII).Trim();
                             usedSource = d;
-                            stepLog("共有フォルダ (" + d + ") からパッケージを取得しました。");
+                            stepLog("フォルダ (" + d + ") からパッケージを取得しました。");
                             break;
                         }
                     }
@@ -712,7 +726,7 @@ namespace RSBaseInstaller
 
             if (vbsBytes == null || ps1Bytes == null)
             {
-                string netErr = "RS-Baseサーバー (http://192.168.1.16/rsbase) から必要なファイルを取得できませんでした。院内ネットワーク接続をご確認ください。";
+                string netErr = "サーバー (http://192.168.1.163/rsnext または http://192.168.1.16/rsbase) から必要なファイルを取得できませんでした。院内ネットワーク接続をご確認ください。";
                 AppendLocalClientLog("", "ERROR", "INSTALL_FAIL", netErr);
                 SendServerReport(opts, "ERROR", "INSTALL_FAIL", netErr, trace.ToString(), "", resolvedVer, wshOk);
                 return new InstallResult
@@ -725,7 +739,7 @@ namespace RSBaseInstaller
             }
 
             // Step 3: Write files to C:\RSBASE (or fallback to %LOCALAPPDATA%\RSBASE)
-            if (progress != null) progress(65, "システムフォルダへ配置・旧版のバックアップ整理中...", modeBadge);
+            if (progress != null) progress(60, "システムフォルダへ配置・旧版のバックアップ整理中...", modeBadge);
             string targetDir = primaryDir;
             try
             {
@@ -743,6 +757,7 @@ namespace RSBaseInstaller
 
             string targetVbs = Path.Combine(targetDir, "watcher.vbs");
             string targetPs1 = Path.Combine(targetDir, "cd_burn.ps1");
+            string targetHttpPs1 = Path.Combine(targetDir, "rsview_http_launch.ps1");
 
             // Preserve backup of legacy watcher.vbs if it wasn't v2.2+
             if (File.Exists(targetVbs))
@@ -762,11 +777,115 @@ namespace RSBaseInstaller
 
             File.WriteAllBytes(targetVbs, vbsBytes);
             File.WriteAllBytes(targetPs1, ps1Bytes);
+            if (httpLaunchBytes != null && httpLaunchBytes.Length > 200)
+            {
+                File.WriteAllBytes(targetHttpPs1, httpLaunchBytes);
+                NativeMethods.UnblockFile(targetHttpPs1);
+            }
             File.WriteAllText(Path.Combine(targetDir, "watcher_version.txt"), resolvedVer + "\n", Encoding.ASCII);
 
             NativeMethods.UnblockFile(targetVbs);
             NativeMethods.UnblockFile(targetPs1);
-            stepLog("最新スクリプトを配置しました: " + targetDir);
+            stepLog("最新連携スクリプトを配置しました: " + targetDir);
+
+            // Step 3b: Auto-install / Zero-SMB heal local RSViewer (C:\RSBASE\RSB_public_html\RSViewer)
+            try
+            {
+                string pubHtmlDir = Path.Combine(targetDir, "RSB_public_html");
+                string viewerDir = Path.Combine(pubHtmlDir, "RSViewer");
+                string viewerExe = Path.Combine(viewerDir, "RSView.exe");
+                string viewer2d = Path.Combine(viewerDir, "RSView2D.exe");
+                string licViewer = Path.Combine(viewerDir, "RSView_LIC.dat");
+                string licParent = Path.Combine(pubHtmlDir, "RSView_LIC.dat");
+
+                bool needViewerPkg = !File.Exists(viewerExe) || !File.Exists(viewer2d) || (!File.Exists(licViewer) && !File.Exists(licParent));
+                if (needViewerPkg)
+                {
+                    if (progress != null) progress(74, "RSViewer 本体パッケージをHTTP経由でローカル配備中...", modeBadge);
+                    byte[] pkgBytes = null;
+                    foreach (string baseUrl in httpCandidates)
+                    {
+                        try
+                        {
+                            pkgBytes = TryHttpGetBytes(baseUrl + "/RSViewer_pkg.zip" + bust, 30000);
+                            if (pkgBytes != null && pkgBytes.Length > 1000000)
+                            {
+                                stepLog("RSViewer パッケージを取得しました (" + (pkgBytes.Length / 1048576.0).ToString("F1") + " MB): " + baseUrl);
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                    if (pkgBytes == null)
+                    {
+                        foreach (string d in new[] { @"C:\Apache24\htdocs\rsnext", @"C:\Apache24\htdocs\rsbase" })
+                        {
+                            string localPkg = Path.Combine(d, "RSViewer_pkg.zip");
+                            if (File.Exists(localPkg))
+                            {
+                                pkgBytes = File.ReadAllBytes(localPkg);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (pkgBytes != null && pkgBytes.Length > 1000000)
+                    {
+                        Directory.CreateDirectory(viewerDir);
+                        string fullRoot = Path.GetFullPath(viewerDir).TrimEnd('\\') + "\\";
+                        using (MemoryStream ms = new MemoryStream(pkgBytes))
+                        using (ZipArchive za = new ZipArchive(ms, ZipArchiveMode.Read))
+                        {
+                            foreach (ZipArchiveEntry entry in za.Entries)
+                            {
+                                string rel = entry.FullName.Replace('/', '\\').TrimStart('\\');
+                                if (string.IsNullOrWhiteSpace(rel)) continue;
+                                string dstEntry = Path.GetFullPath(Path.Combine(fullRoot, rel));
+                                if (!dstEntry.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                                if (entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\"))
+                                {
+                                    Directory.CreateDirectory(dstEntry);
+                                }
+                                else
+                                {
+                                    Directory.CreateDirectory(Path.GetDirectoryName(dstEntry));
+                                    using (Stream es = entry.Open())
+                                    using (FileStream fs = new FileStream(dstEntry, FileMode.Create, FileAccess.Write))
+                                    {
+                                        es.CopyTo(fs);
+                                    }
+                                    NativeMethods.UnblockFile(dstEntry);
+                                }
+                            }
+                        }
+                        stepLog("RSViewer をローカルへインストールしました (サーバフォルダ共有不要): " + viewerDir);
+                    }
+                    else
+                    {
+                        stepLog("注意: RSViewer_pkg.zip の取得をスキップしました（初回クリック時に自動再試行されます）。");
+                    }
+                }
+
+                if (File.Exists(viewerExe))
+                {
+                    Directory.CreateDirectory(pubHtmlDir);
+                    string serverDat = Path.Combine(viewerDir, "RSB_Server.dat");
+                    File.WriteAllText(serverDat, pubHtmlDir.TrimEnd('\\') + "\\\r\n", Encoding.GetEncoding(932));
+                    if (File.Exists(licViewer) && !File.Exists(licParent))
+                    {
+                        File.Copy(licViewer, licParent, true);
+                    }
+                    else if (File.Exists(licParent) && !File.Exists(licViewer))
+                    {
+                        File.Copy(licParent, licViewer, true);
+                    }
+                    stepLog("RSViewer ローカル完結設定 (RSB_Server.dat / ライセンス) を確認・適用しました。");
+                }
+            }
+            catch (Exception rvEx)
+            {
+                stepLog("注意: RSViewer セットアップ確認中: " + rvEx.Message);
+            }
 
             // Clean up duplicate fallback install if installed to primary C:\RSBASE
             if (string.Equals(targetDir, primaryDir, StringComparison.OrdinalIgnoreCase))
@@ -950,7 +1069,7 @@ namespace RSBaseInstaller
 
                 string primaryDir = @"C:\RSBASE";
                 string fallbackDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RSBASE");
-                string[] managedFiles = new[] { "watcher.vbs", "watcher.vbs.upd", "watcher.vbs.legacy_bak", "cd_burn.ps1", "cd_burn.ps1.upd", "watcher_version.txt" };
+                string[] managedFiles = new[] { "watcher.vbs", "watcher.vbs.upd", "watcher.vbs.legacy_bak", "cd_burn.ps1", "cd_burn.ps1.upd", "rsview_http_launch.ps1", "rsview_http_launch.ps1.upd", "watcher_version.txt" };
                 foreach (string d in new[] { primaryDir, fallbackDir })
                 {
                     if (!Directory.Exists(d)) continue;
@@ -965,7 +1084,7 @@ namespace RSBaseInstaller
                 }
 
                 AppendLocalClientLog(primaryDir, "INFO", "UNINSTALL_OK", "セットアップ画面からPC連携を解除しました");
-                SendServerReport(_opts, "INFO", "UNINSTALL_OK", "セットアップ画面からPC連携を解除しました", "", primaryDir, "2.2.2", CheckWshEnabled());
+                SendServerReport(_opts, "INFO", "UNINSTALL_OK", "セットアップ画面からPC連携を解除しました", "", primaryDir, "2.4.0", CheckWshEnabled());
             });
 
             _summaryPanel.BackColor = Color.FromArgb(255, 251, 235);

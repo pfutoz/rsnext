@@ -545,6 +545,91 @@ if ($action === 'zip') {
     exit;
 }
 
+// ④-B クライアントローカル RSViewer 用・ゼロSMB 高速無圧縮DICOMバンドル配信 (action=dicom_bundle)
+if ($action === 'dicom_bundle') {
+    while (ob_get_level() > 0) @ob_end_clean();
+    @set_time_limit(300);
+
+    if ($folder === '' || !is_dir($folder)) {
+        header('Content-Type: application/json; charset=UTF-8');
+        http_response_code(404);
+        echo json_encode(['status' => 'error', 'message' => '検査フォルダが見つかりません: ' . $folder], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $tmp_bundle = $adhoc_cache_dir . 'bundle_' . uniqid('', true) . '.zip';
+    register_shutdown_function(function () use ($tmp_bundle) {
+        if (is_file($tmp_bundle)) @unlink($tmp_bundle);
+    });
+
+    $zip = new ZipArchive();
+    if ($zip->open($tmp_bundle, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        header('Content-Type: application/json; charset=UTF-8');
+        http_response_code(500);
+        echo json_encode(['status' => 'error', 'message' => 'DICOMバンドル一時作成に失敗しました'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $allowed_exts = ['dcm', '', 'jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'avi', 'mpg', 'mpeg', 'mp4', 'wmv'];
+    $skip_names = ['study_meta.json', 'thumbs.db', 'desktop.ini', '.gitkeep', 'dicomdir'];
+    $base_len = strlen($folder) + 1;
+    $added_files = 0;
+
+    try {
+        $rii = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($folder, FilesystemIterator::SKIP_DOTS)
+        );
+        $file_entries = [];
+        foreach ($rii as $fi) {
+            if (!$fi->isFile()) continue;
+            $fn_low = strtolower($fi->getFilename());
+            if (in_array($fn_low, $skip_names, true)) continue;
+            $ext = strtolower($fi->getExtension());
+            if (in_array($ext, $allowed_exts, true)) {
+                $full_fp = $fi->getPathname();
+                $rel_fp = str_replace('\\', '/', substr($full_fp, $base_len));
+                if ($rel_fp !== '') {
+                    $file_entries[] = ['full' => $full_fp, 'rel' => $rel_fp];
+                }
+            }
+        }
+        usort($file_entries, fn($a, $b) => strnatcasecmp($a['rel'], $b['rel']));
+        foreach ($file_entries as $ent) {
+            if ($zip->addFile($ent['full'], $ent['rel'])) {
+                $zip->setCompressionName($ent['rel'], ZipArchive::CM_STORE);
+                $added_files++;
+            }
+        }
+    } catch (Throwable $e) {
+        $zip->close();
+        @unlink($tmp_bundle);
+        header('Content-Type: application/json; charset=UTF-8');
+        http_response_code(500);
+        echo json_encode(['status' => 'error', 'message' => 'DICOM走査エラー: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $zip->close();
+
+    if ($added_files === 0 || !is_file($tmp_bundle)) {
+        @unlink($tmp_bundle);
+        header('Content-Type: application/json; charset=UTF-8');
+        http_response_code(404);
+        echo json_encode(['status' => 'error', 'message' => '配信可能なDICOM・画像ファイルが見つかりませんでした'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $dl_name = ($study_id > 0 ? "study_{$study_id}" : 'dicom_bundle') . '.zip';
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="' . $dl_name . '"');
+    header('Content-Length: ' . filesize($tmp_bundle));
+    header('X-File-Count: ' . $added_files);
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    readfile($tmp_bundle);
+    @unlink($tmp_bundle);
+    exit;
+}
+
 // ⑤ PDFレポート直接配信 (action=pdf)
 if ($action === 'pdf') {
     while (ob_get_level() > 0) @ob_end_clean();

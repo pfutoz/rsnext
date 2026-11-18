@@ -13,20 +13,44 @@ require_once __DIR__ . '/lib/bootstrap.php';
 
 $cfg = rsnext_config();
 
-// 共通常駐モジュール (192.168.1.16/rsbase の watcher.vbs) 併用時の非同期起動トリガーAPI
+// 共通常駐モジュール (watcher.vbs) 併用時の非同期起動トリガーAPI（ゼロSMB HTTP_DICOM完全対応）
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '') === 'launch') {
     header('Content-Type: application/json; charset=UTF-8');
-    $folder = trim((string)($_POST['folder'] ?? ''));
-    $launchMode = trim((string)($_POST['launch_mode'] ?? 'NORMAL'));
-    if ($folder === '') {
-        echo json_encode(['status' => 'error', 'message' => 'フォルダパスが空です'], JSON_UNESCAPED_UNICODE);
-        exit;
+    $studyId    = (int)($_POST['study_id'] ?? 0);
+    $folder     = trim((string)($_POST['folder'] ?? ''));
+    $launchMode = strtoupper(trim((string)($_POST['launch_mode'] ?? 'HTTP_DICOM')));
+
+    if ($launchMode === 'HTTP_DICOM' || $launchMode === 'NORMAL') {
+        if ($studyId <= 0 && $folder === '') {
+            echo json_encode(['status' => 'error', 'message' => '検査IDまたはフォルダパスが空です'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $triggerLine = rsnext_build_http_dicom_trigger_line($studyId, $folder);
+    } else {
+        if ($folder === '' && $studyId > 0) {
+            try {
+                $pdo = rsnext_pdo();
+                $st = $pdo->prepare("SELECT volume_id, rel_path FROM studies WHERE study_id = ?");
+                $st->execute([$studyId]);
+                $r = $st->fetch();
+                if ($r) {
+                    $folder = rsnext_resolve_study_smb((string)$r['volume_id'], (string)$r['rel_path']);
+                }
+            } catch (Throwable $e) {
+            }
+        }
+        if ($folder === '') {
+            echo json_encode(['status' => 'error', 'message' => 'フォルダパスが空です'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $triggerLine = $launchMode . '|' . $folder;
     }
+
     $tmpDir = __DIR__ . '/tmp';
     $clientIp = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     if ($clientIp === '::1') $clientIp = '127.0.0.1';
-    $ok = rsnext_write_client_trigger('trigger', $clientIp, $launchMode . '|' . $folder, $tmpDir);
-    echo json_encode(['status' => $ok ? 'success' : 'error'], JSON_UNESCAPED_UNICODE);
+    $ok = rsnext_write_client_trigger('trigger', $clientIp, $triggerLine, $tmpDir);
+    echo json_encode(['status' => $ok ? 'success' : 'error', 'mode' => $launchMode], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -701,6 +725,8 @@ function build_query_url(array $overrides): string {
                     $hoverTip  = trim(($doctor !== '' ? "【担当医】{$doctor}\n" : '') . $findings);
                     $karteUrl  = rsnext_build_karte_url($pid, $karteTpl);
                     $smbPath   = $enableLegacyLocal ? rsnext_resolve_study_smb((string)$st['volume_id'], (string)$st['rel_path']) : '';
+                    $isTomo    = rsnext_is_tomographic_study($modUpper, $kensamei, $fType);
+                    $openTip   = $isTomo ? 'クリックでクライアントPCの RSViewer で断層画像を開きます（サーバ共有不要）' : '';
                 ?>
                 <tr class="study-row"
                     data-pid="<?= rsnext_h($pid) ?>"
@@ -710,11 +736,13 @@ function build_query_url(array $overrides): string {
 
                     <!-- サムネイル (ホバーで拡大プレビュー) -->
                     <td class="thumb-cell">
-                        <div class="thumb-box" style="position:relative;" onclick="handleExamOpen(<?= $sid ?>, '<?= rsnext_h($fType) ?>', '<?= rsnext_h(addslashes($pid)) ?>', '<?= rsnext_h(addslashes($kanji)) ?>', '<?= rsnext_h(addslashes($smbPath)) ?>')">
+                        <div class="thumb-box" style="position:relative;" <?= $openTip !== '' ? ('title="' . rsnext_h($openTip) . '"') : '' ?> onclick="handleExamOpen(<?= $sid ?>, '<?= rsnext_h($fType) ?>', '<?= rsnext_h(addslashes($pid)) ?>', '<?= rsnext_h(addslashes($kanji)) ?>', '<?= rsnext_h(addslashes($smbPath)) ?>', <?= $isTomo ? 'true' : 'false' ?>)">
                             <?php if ($fType === 'DICOM' || $fType === 'IMAGE' || $fType === 'VIDEO'): ?>
                                 <img loading="lazy" src="dcm_api.php?study_id=<?= $sid ?>&file=<?= rawurlencode($firstFile) ?>&thumb=1" alt="thumb">
                                 <?php if ($fType === 'VIDEO'): ?>
                                     <span style="position:absolute;bottom:2px;right:2px;background:rgba(13,148,136,0.9);color:#fff;font-size:0.62rem;font-weight:800;padding:0 4px;border-radius:3px;">▶動画</span>
+                                <?php elseif ($isTomo): ?>
+                                    <span style="position:absolute;bottom:2px;right:2px;background:rgba(2,132,199,0.92);color:#fff;font-size:0.6rem;font-weight:800;padding:0 4px;border-radius:3px;">RSView</span>
                                 <?php endif; ?>
                             <?php elseif ($fType === 'ECG'): ?>
                                 <span style="font-size:0.95rem;" title="12誘導心電図">📈</span>
@@ -734,7 +762,8 @@ function build_query_url(array $overrides): string {
                     <!-- ② 検査名バッジ (1行) -->
                     <td>
                         <button type="button" class="kensa-badge" style="background:<?= rsnext_h($bColor) ?>;"
-                                onclick="handleExamOpen(<?= $sid ?>, '<?= rsnext_h($fType) ?>', '<?= rsnext_h(addslashes($pid)) ?>', '<?= rsnext_h(addslashes($kanji)) ?>', '<?= rsnext_h(addslashes($smbPath)) ?>')">
+                                <?= $openTip !== '' ? ('title="' . rsnext_h($openTip) . '"') : '' ?>
+                                onclick="handleExamOpen(<?= $sid ?>, '<?= rsnext_h($fType) ?>', '<?= rsnext_h(addslashes($pid)) ?>', '<?= rsnext_h(addslashes($kanji)) ?>', '<?= rsnext_h(addslashes($smbPath)) ?>', <?= $isTomo ? 'true' : 'false' ?>)">
                             <span><?= rsnext_h($emoji) ?></span>
                             <span><?= rsnext_h($dispKensa) ?></span>
                         </button><span class="slice-count"><?= $fType === 'ECG' ? '12誘導' : ($fType === 'VIDEO' ? ($fCount . '本') : ($fCount . '枚')) ?></span>
@@ -925,15 +954,43 @@ function showToast(msg) {
     setTimeout(() => t.classList.remove('show'), 3200);
 }
 
-// ビューワ起動制御（標準Webモードは別タブ起動）
-function handleExamOpen(studyId, fileType, patId, patName, smbPath) {
+function launchLocalRsViewer(studyId, folderPath, launchMode, toastMsg) {
+    const fd = new URLSearchParams({
+        action: 'launch',
+        study_id: String(studyId || 0),
+        folder: folderPath || '',
+        launch_mode: launchMode || 'HTTP_DICOM'
+    });
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (d.status === 'success') {
+                showToast(toastMsg || '🚀 ローカル RSViewer を起動しています...');
+            } else {
+                alert('ビューワ起動エラー: ' + (d.message || '不明なエラー'));
+            }
+        })
+        .catch(e => alert('通信エラー: ' + e.message));
+}
+
+// ビューワ起動制御（断層データはローカルRSViewer直起動・その他は別タブWebビューワ）
+function handleExamOpen(studyId, fileType, patId, patName, smbPath, isTomo = false) {
     if (CURRENT_MODE === 'jpeg' && (fileType === 'DICOM' || fileType === 'IMAGE')) {
         openOneShotJpegModal(studyId, patId, patName);
         return;
     }
-    if (CURRENT_MODE === 'custom' && smbPath) {
-        const fd = new URLSearchParams({ action: 'launch', folder: smbPath, launch_mode: fileType === 'ECG' ? 'ECG' : 'NORMAL' });
-        fetch('index.php', { method: 'POST', body: fd }).then(() => showToast('⚡ ローカルビューワ起動トリガーを送信しました'));
+    if (CURRENT_MODE === 'custom') {
+        if (fileType === 'ECG' && smbPath) {
+            launchLocalRsViewer(studyId, smbPath, 'ECG', '⚡ 心電図ビューワを起動しています...');
+            return;
+        }
+        if (fileType === 'DICOM' || fileType === 'IMAGE') {
+            launchLocalRsViewer(studyId, '', 'HTTP_DICOM', '🚀 ローカル RSViewer を起動しています（共有フォルダ不要）...');
+            return;
+        }
+    }
+    if (isTomo && (fileType === 'DICOM' || fileType === 'IMAGE')) {
+        launchLocalRsViewer(studyId, '', 'HTTP_DICOM', '🌀 断層データ (CT/MRI) をローカル RSViewer で起動しています...');
         return;
     }
     const url = (fileType === 'ECG')

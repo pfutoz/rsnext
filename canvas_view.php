@@ -14,16 +14,28 @@ $tmp_dir = __DIR__ . '/tmp/';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '') === 'launch') {
     header('Content-Type: application/json; charset=UTF-8');
-    $folder = (string)($_POST['folder'] ?? '');
-    $mode   = (string)($_POST['launch_mode'] ?? 'NORMAL');
-    if ($folder !== '') {
-        $client_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-        if (!is_dir($tmp_dir)) @mkdir($tmp_dir, 0777, true);
-        @file_put_contents($tmp_dir . 'trigger_' . $client_ip . '.txt', $mode . '|' . $folder);
-        echo json_encode(['status' => 'success']);
+    $studyId = (int)($_POST['study_id'] ?? 0);
+    $folder  = trim((string)($_POST['folder'] ?? ''));
+    $mode    = strtoupper(trim((string)($_POST['launch_mode'] ?? 'HTTP_DICOM')));
+    $client_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    if ($client_ip === '::1') $client_ip = '127.0.0.1';
+
+    if ($mode === 'HTTP_DICOM' || $mode === 'NORMAL') {
+        if ($studyId <= 0 && $folder === '') {
+            echo json_encode(['status' => 'error', 'message' => '検査IDまたはフォルダパスが空です'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $triggerLine = rsnext_build_http_dicom_trigger_line($studyId, $folder);
     } else {
-        echo json_encode(['status' => 'error', 'message' => 'フォルダパスが空です']);
+        if ($folder === '') {
+            echo json_encode(['status' => 'error', 'message' => 'フォルダパスが空です'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $triggerLine = $mode . '|' . $folder;
     }
+
+    $ok = rsnext_write_client_trigger('trigger', $client_ip, $triggerLine, __DIR__ . '/tmp');
+    echo json_encode(['status' => $ok ? 'success' : 'error', 'message' => 'RSViewer を起動しています（共有フォルダ不要）'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -122,6 +134,7 @@ if ($patient_id !== '') {
                 'folder'       => $targetPath,
                 'raw_folder'   => $targetPath,
                 'is_ecg'       => $isEcg,
+                'is_tomo'      => rsnext_is_tomographic_study((string)($r['modality'] ?? ''), (string)$r['kensamei'], (string)($r['primary_file_type'] ?? 'DICOM')),
             ];
         }
     } catch (Throwable $e) {
@@ -1847,9 +1860,12 @@ $standalone_url = 'canvas_view.php?patient_no=' . urlencode($patient_id)
                         : `ecg_view.php?folder=${encodeURIComponent(fld)}&file=${encodeURIComponent(fld)}&name=${encodeURIComponent(pName)}&id=${encodeURIComponent(pId)}&kensa=${encodeURIComponent(kensaName)}&date=${encodeURIComponent(examDate)}`;
 
                     const isEcg = exam.is_ecg || exam.category === 'ecg' || (exam.kensamei && exam.kensamei.indexOf('心電図') !== -1);
+                    const isTomo = Boolean(exam.is_tomo);
                     const viewerBtn = isEcg 
                         ? `<a href="${ecgUrl}" target="_blank" class="btn-view-tab btn-view-ecg" title="心電図Webビューワーを別タブで起動">📈 心電図 ↗</a>`
-                        : `<a href="${dcmUrl}" target="_blank" class="btn-view-tab btn-view-dcm" title="DICOM Webビューワーを別タブで起動">👁️ DICOM ↗</a>`;
+                        : (isTomo
+                            ? `<button type="button" onclick="triggerLaunch('${escapeJs(fld)}', 'HTTP_DICOM', ${exam.study_id || 0})" class="btn-view-tab btn-view-dcm" style="cursor:pointer;border:none;" title="ローカルPCの RSViewer で断層画像を開く（共有フォルダ不要）">🌀 RSViewer起動</button> <a href="${dcmUrl}" target="_blank" class="btn-view-tab" style="padding:3px 7px;background:rgba(255,255,255,0.08);color:#cbd5e1;" title="Webビューワで簡易表示">↗</a>`
+                            : `<a href="${dcmUrl}" target="_blank" class="btn-view-tab btn-view-dcm" title="DICOM Webビューワーを別タブで起動">👁️ DICOM ↗</a>`);
 
                     // 検査実施時の年齢（「当時」表記なし） & 担当医
                     const ageVal = exam.age_at_exam || exam.age || '';
@@ -2204,13 +2220,14 @@ $standalone_url = 'canvas_view.php?patient_no=' . urlencode($patient_id)
         // ==============================================================================
         // ビューワ連携・トリガー非同期送信
         // ==============================================================================
-        function triggerLaunch(folder, launchMode) {
-            showToast(`🚀 ビューワ起動トリガー送信中 (${launchMode})...`);
+        function triggerLaunch(folder, launchMode, studyId = 0) {
+            showToast(`🚀 RSViewer を起動しています...`);
 
             const formData = new FormData();
             formData.append('action', 'launch');
-            formData.append('folder', folder);
-            formData.append('launch_mode', launchMode);
+            formData.append('study_id', String(studyId || 0));
+            formData.append('folder', folder || '');
+            formData.append('launch_mode', launchMode || 'HTTP_DICOM');
 
             fetch('canvas_view.php', {
                 method: 'POST',

@@ -1338,6 +1338,9 @@ if (preg_match('/エコー|超音波|US|XP|CR|CT|MR|RF|透視|レントゲン|�
             <button type="button" class="mpr-pill" data-plane="coronal" onclick="switchMprPlane('coronal')">冠状断 (Coronal)</button>
             <button type="button" class="mpr-pill" data-plane="sagittal" onclick="switchMprPlane('sagittal')">矢状断 (Sagittal)</button>
         </div>
+        <div class="ct-subbar-group" style="margin-left:auto;">
+            <button type="button" class="wl-pill" style="background:#0284c7;border-color:#38bdf8;color:#ffffff;font-weight:800;" onclick="document.getElementById('btnDirectLaunch').click()" title="クライアントPCのローカルRSViewerで高速閲覧（共有フォルダ不要）">🚀 RSViewer (PCアプリ) で開く</button>
+        </div>
     </div>
 
     <!-- ----------------------------------------------------------------------
@@ -1628,6 +1631,7 @@ if (preg_match('/エコー|超音波|US|XP|CR|CT|MR|RF|透視|レントゲン|�
     ----------------------------------------------------------------------- -->
     <script>
         // 設定 & パラメータ
+        const STUDY_ID    = <?= (int)$study_id ?>;
         const FOLDER_PATH = <?= json_encode($folder, JSON_UNESCAPED_UNICODE) ?>;
         const PAT_ID      = <?= json_encode($pat_id, JSON_UNESCAPED_UNICODE) ?>;
         const PAT_NAME    = <?= json_encode($pat_name, JSON_UNESCAPED_UNICODE) ?>;
@@ -3633,13 +3637,14 @@ if (preg_match('/エコー|超音波|US|XP|CR|CT|MR|RF|透視|レントゲン|�
             window.location.href = `dcm_api.php?action=zip&folder=${encodeURIComponent(FOLDER_PATH)}`;
         });
 
-        // 外部ビューワ直接起動
+        // 外部ビューワ直接起動（ゼロSMB・HTTPキャッシュ方式でクライアントの RSViewer を起動）
         btnDirectLaunch.addEventListener('click', () => {
-            if (!FOLDER_PATH) return;
+            if (!STUDY_ID && !FOLDER_PATH) return;
             const formData = new URLSearchParams();
             formData.append('action', 'launch');
-            formData.append('folder', FOLDER_PATH);
-            formData.append('launch_mode', 'NORMAL');
+            if (STUDY_ID > 0) formData.append('study_id', String(STUDY_ID));
+            if (FOLDER_PATH) formData.append('folder', FOLDER_PATH);
+            formData.append('launch_mode', 'HTTP_DICOM');
 
             fetch('index.php', { method: 'POST', body: formData })
                 .then(r => r.text())
@@ -3647,7 +3652,7 @@ if (preg_match('/エコー|超音波|US|XP|CR|CT|MR|RF|透視|レントゲン|�
                     let d;
                     try { d = JSON.parse(text); } catch(err) { throw new Error(text.slice(0, 100)); }
                     if (d.status === 'success') {
-                        showToast("🚀 外部ビューワ起動トリガー送信完了");
+                        showToast("🚀 ローカル RSViewer を起動しています（共有フォルダ不要）...");
                     } else {
                         alert("起動エラー: " + d.message);
                     }

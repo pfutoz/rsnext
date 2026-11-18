@@ -14,6 +14,10 @@ tmp/*
 config/server_config.json
 config/server_config.production_2025.json
 
+# Proprietary local viewer distribution package & license (NEVER commit to public repo)
+RSViewer_pkg.zip
+RSView_LIC.dat
+
 # Logs, backups, editor & OS metadata
 *.log
 *.bak

@@ -1,14 +1,16 @@
-' --- watcher.vbs v2.2.4 (Auto-Update + SMB/HTTP Dual Polling + Direct CD Burn + Fast Trigger Pickup) ---
+' --- watcher.vbs v2.4.0 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + Auto-Provision + Dual Polling) ---
 Option Explicit
 
-Const WATCHER_VERSION = "2.3.0"
+Const WATCHER_VERSION = "2.4.0"
 
-Dim objShell, objFSO, network, prodRoot, localRoot, prodHttpBase, localHttpBase
+Dim objShell, objFSO, network, prodRoot, localRoot, prodHttpBase, rsnextHttpBase, localHttpBase
 Dim normalExePath, ecgExePath
 Dim desktopPath, toolDir, scriptPath, selfDirPath
 Dim myIPs, loopCount, currentIp, hasIpCached
 Dim candidateRoots, rootIdx, activeRoot, activeTmpDir, checkIPs, myBurnFile, myTriggerFile
-Dim smbAnyAccessible, lastSmbState, httpPollText, reportBaseCache
+Dim smbAnyAccessible, rsbaseSmbAccessible, lastSmbState, httpPollText, httpConnOk
+Dim rsbaseHttpCooldown, rsnextHttpCooldown
+Dim lastDispatchLine, lastDispatchTimer
 Dim objFile, fileContent, payload, triggered
 Dim isSelfTest, customServerArg, argIdx, argVal
 
@@ -34,14 +36,18 @@ If WScript.Arguments.Count > 0 Then
 End If
 
 ' Configuration Paths
-prodRoot      = "\\192.168.1.16\htdocs\rsbase\"
-localRoot     = "C:\Apache24\htdocs\rsbase\"
-prodHttpBase  = "http://192.168.1.16/rsbase"
-localHttpBase = "http://127.0.0.1/rsbase"
-normalExePath = "C:\RSBASE\RSB_public_html\RSViewer\rsview.exe"
-ecgExePath    = "C:\RSBASE\RSB_public_html\denshi\FEV-05.exe"
-selfDirPath   = objFSO.GetParentFolderName(WScript.ScriptFullName)
-reportBaseCache = ""
+prodRoot       = "\\192.168.1.16\htdocs\rsbase\"
+localRoot      = "C:\Apache24\htdocs\rsbase\"
+prodHttpBase   = "http://192.168.1.16/rsbase"
+rsnextHttpBase = "http://192.168.1.163/rsnext"
+localHttpBase  = "http://127.0.0.1/rsbase"
+normalExePath  = "C:\RSBASE\RSB_public_html\RSViewer\rsview.exe"
+ecgExePath     = "C:\RSBASE\RSB_public_html\denshi\FEV-05.exe"
+selfDirPath    = objFSO.GetParentFolderName(WScript.ScriptFullName)
+rsbaseHttpCooldown = 0
+rsnextHttpCooldown = 0
+lastDispatchLine  = ""
+lastDispatchTimer = -100
 
 ' DicomTool Path (Desktop\DicomTool with fallback to C:\Users\Owner\Desktop\DicomTool)
 desktopPath = objShell.SpecialFolders("Desktop")
@@ -68,7 +74,7 @@ End Function
 Function ResolveLocalLogFile()
     Dim lDir, lFile
     On Error Resume Next
-    If LCase(selfDirPath & "\") = LCase(localRoot) Or LCase(selfDirPath & "\") = LCase(prodRoot) Then
+    If LCase(selfDirPath & "\") = LCase(localRoot) Or LCase(selfDirPath & "\") = LCase(prodRoot) Or LCase(selfDirPath & "\") = "c:\apache24\htdocs\rsnext\" Then
         ResolveLocalLogFile = objFSO.GetSpecialFolder(2) & "\rsbase_client.log"
         On Error Goto 0
         Exit Function
@@ -117,7 +123,7 @@ Sub WriteLocalLog(levelStr, eventStr, msgStr, detailStr)
 End Sub
 
 ' ------------------------------------------------------------------------------
-' UTF-8 URL Encoder & HTTP Diagnostic Reporter
+' UTF-8 URL Encoder & HTTP Diagnostic Reporter (Syncs to RS-Base & RS-Next)
 ' ------------------------------------------------------------------------------
 Function UrlEncodeUtf8(rawStr)
     Dim stm, binData, i, bVal, outStr
@@ -200,7 +206,7 @@ Function Bool01(bVal)
 End Function
 
 Sub ReportClientEvent(levelStr, eventStr, msgStr, detailStr, smbOkFlag, recordEventFlag)
-    Dim ipCsv, cdburnExists, postData, candidates, idx, baseU
+    Dim ipCsv, cdburnExists, postData, candidates, idx, baseU, sentAny
     On Error Resume Next
 
     If recordEventFlag = "1" Then
@@ -236,32 +242,38 @@ Sub ReportClientEvent(levelStr, eventStr, msgStr, detailStr, smbOkFlag, recordEv
 
     If Len(customServerArg) > 0 Then
         candidates = Array(customServerArg)
-    ElseIf Len(reportBaseCache) > 0 Then
-        candidates = Array(reportBaseCache, prodHttpBase, localHttpBase)
-    ElseIf objFSO.FolderExists(localRoot & "tmp\") Then
-        candidates = Array(localHttpBase, prodHttpBase)
     Else
-        candidates = Array(prodHttpBase, localHttpBase)
+        candidates = Array(prodHttpBase, rsnextHttpBase)
     End If
 
+    sentAny = False
     For idx = 0 To UBound(candidates)
         baseU = candidates(idx)
         If Len(baseU) > 0 Then
-            If HttpPostForm(baseU & "/client_logs.php?action=report", postData, 2000) Then
-                reportBaseCache = baseU
-                Exit For
+            If HttpPostForm(baseU & "/client_logs.php?action=report", postData, 1500) Then
+                sentAny = True
             End If
         End If
     Next
+
+    If (Not sentAny) And Len(customServerArg) = 0 Then
+        Call HttpPostForm(localHttpBase & "/client_logs.php?action=report", postData, 1200)
+    End If
     On Error Goto 0
 End Sub
 
 ' ------------------------------------------------------------------------------
-' HTTP Helpers (Binary-safe for CP932 & UTF-8 BOM, plus HTTP Trigger Fallback)
+' HTTP Helpers (Binary-safe + Adaptive Poll Helper)
 ' ------------------------------------------------------------------------------
 Function HttpGetText(url, timeoutMs)
+    Dim okDummy
+    HttpGetText = HttpGetPoll(url, timeoutMs, okDummy)
+End Function
+
+Function HttpGetPoll(url, timeoutMs, ByRef connOkOut)
     Dim http, txt
-    HttpGetText = ""
+    HttpGetPoll = ""
+    connOkOut = False
     On Error Resume Next
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
     If Err.Number <> 0 Then
@@ -275,8 +287,9 @@ Function HttpGetText(url, timeoutMs)
         http.setRequestHeader "Cache-Control", "no-cache"
         http.Send
         If Err.Number = 0 And http.Status = 200 Then
+            connOkOut = True
             txt = Trim(Replace(Replace(http.responseText, vbCr, ""), vbLf, ""))
-            HttpGetText = txt
+            HttpGetPoll = txt
         End If
     End If
     Set http = Nothing
@@ -293,7 +306,7 @@ Function HttpDownloadBinary(url, savePath)
         Set http = CreateObject("MSXML2.XMLHTTP")
     End If
     If Not (http Is Nothing) Then
-        http.setTimeouts 3000, 3000, 8000, 8000
+        http.setTimeouts 3000, 3000, 12000, 12000
         Err.Clear
         http.Open "GET", url, False
         http.setRequestHeader "Cache-Control", "no-cache"
@@ -327,9 +340,77 @@ Function IsValidVersionTag(verStr)
     End If
 End Function
 
+' ------------------------------------------------------------------------------
+' Ensure Local RSViewer Zero-SMB Configuration & Silent Provisioning
+' ------------------------------------------------------------------------------
+Sub EnsureLocalRsViewerZeroSmb()
+    Dim pubDir, viewDir, datPath, licView, licPub, curDat, fDat, launchPs1
+    On Error Resume Next
+    pubDir  = "C:\RSBASE\RSB_public_html"
+    viewDir = pubDir & "\RSViewer"
+    datPath = viewDir & "\RSB_Server.dat"
+    licView = viewDir & "\RSView_LIC.dat"
+    licPub  = pubDir & "\RSView_LIC.dat"
+
+    If objFSO.FileExists(normalExePath) Then
+        curDat = ""
+        If objFSO.FileExists(datPath) Then
+            Set fDat = objFSO.OpenTextFile(datPath, 1, False)
+            If Not fDat.AtEndOfStream Then curDat = Trim(Replace(Replace(fDat.ReadAll, vbCr, ""), vbLf, ""))
+            fDat.Close
+            Set fDat = Nothing
+        End If
+        If LCase(curDat) <> LCase(pubDir & "\") Then
+            Set fDat = objFSO.OpenTextFile(datPath, 2, True)
+            fDat.WriteLine pubDir & "\"
+            fDat.Close
+            Set fDat = Nothing
+            Call WriteLocalLog("INFO", "ZERO_SMB_HEAL", "RSB_Server.dat をローカル完結パスへ自動補正しました", "old=" & curDat & " -> new=" & pubDir & "\")
+        End If
+        If objFSO.FileExists(licView) And (Not objFSO.FileExists(licPub)) Then
+            objFSO.CopyFile licView, licPub, True
+        ElseIf objFSO.FileExists(licPub) And (Not objFSO.FileExists(licView)) Then
+            objFSO.CopyFile licPub, licView, True
+        End If
+    ElseIf Not isSelfTest Then
+        launchPs1 = ResolveHttpLauncherPs1()
+        If Len(launchPs1) > 0 And objFSO.FileExists(launchPs1) Then
+            objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File """ & launchPs1 & """ -ProvisionOnly", 0, False
+        End If
+    End If
+    On Error Goto 0
+End Sub
+
+Function ResolveHttpLauncherPs1()
+    Dim oPs1, cPs1, tPs1, bust
+    On Error Resume Next
+    ResolveHttpLauncherPs1 = ""
+    oPs1 = selfDirPath & "\rsview_http_launch.ps1"
+    cPs1 = "C:\RSBASE\rsview_http_launch.ps1"
+    tPs1 = objFSO.GetSpecialFolder(2) & "\rsbase_rsview_http_launch.ps1"
+
+    If objFSO.FileExists(oPs1) Then
+        ResolveHttpLauncherPs1 = oPs1
+        On Error Goto 0
+        Exit Function
+    ElseIf objFSO.FileExists(cPs1) Then
+        ResolveHttpLauncherPs1 = cPs1
+        On Error Goto 0
+        Exit Function
+    End If
+
+    bust = "?t=" & CLng(Timer * 100)
+    If HttpDownloadBinary(rsnextHttpBase & "/rsview_http_launch.ps1" & bust, tPs1) Then
+        ResolveHttpLauncherPs1 = tPs1
+    ElseIf HttpDownloadBinary(prodHttpBase & "/rsview_http_launch.ps1" & bust, tPs1) Then
+        ResolveHttpLauncherPs1 = tPs1
+    End If
+    On Error Goto 0
+End Function
+
 Sub CheckSelfUpdate(smbState)
     Dim baseCandidates, i, baseUrl, remoteVer, activeBaseUrl
-    Dim selfPath, selfDir, tmpVbs, tmpPs1, dstPs1, fChk, chkHead, cacheBust
+    Dim selfPath, selfDir, tmpVbs, tmpPs1, dstPs1, tmpHttpPs1, dstHttpPs1, fChk, chkHead, cacheBust
 
     On Error Resume Next
     cacheBust = "?t=" & CLng(Timer * 100)
@@ -337,39 +418,45 @@ Sub CheckSelfUpdate(smbState)
     If Len(customServerArg) > 0 Then
         baseCandidates = Array(customServerArg)
     ElseIf objFSO.FolderExists(localRoot & "tmp\") Then
-        baseCandidates = Array(prodHttpBase, localHttpBase)
+        baseCandidates = Array(prodHttpBase, rsnextHttpBase, localHttpBase)
     Else
-        baseCandidates = Array(prodHttpBase)
+        baseCandidates = Array(prodHttpBase, rsnextHttpBase)
     End If
 
     remoteVer = ""
     activeBaseUrl = ""
     For i = 0 To UBound(baseCandidates)
         baseUrl = baseCandidates(i)
-        remoteVer = HttpGetText(baseUrl & "/watcher_version.txt" & cacheBust, 2500)
+        remoteVer = HttpGetText(baseUrl & "/watcher_version.txt" & cacheBust, 2000)
         If IsValidVersionTag(remoteVer) Then
             activeBaseUrl = baseUrl
             Exit For
         End If
     Next
 
+    selfPath = WScript.ScriptFullName
+    selfDir  = objFSO.GetParentFolderName(selfPath)
+
+    ' Do not overwrite the server master copy if run directly inside htdocs
+    If LCase(selfDir & "\") = LCase(localRoot) Or LCase(selfDir & "\") = LCase(prodRoot) Or LCase(selfDir & "\") = "c:\apache24\htdocs\rsnext\" Then
+        On Error Goto 0
+        Exit Sub
+    End If
+
+    dstHttpPs1 = selfDir & "\rsview_http_launch.ps1"
+    If activeBaseUrl <> "" And (Not objFSO.FileExists(dstHttpPs1)) Then
+        Call HttpDownloadBinary(activeBaseUrl & "/rsview_http_launch.ps1" & cacheBust, dstHttpPs1)
+    End If
+
     If activeBaseUrl = "" Or remoteVer = WATCHER_VERSION Then
         On Error Goto 0
         Exit Sub
     End If
 
-    selfPath = WScript.ScriptFullName
-    selfDir  = objFSO.GetParentFolderName(selfPath)
-
-    ' Do not overwrite the server master copy if run directly inside htdocs
-    If LCase(selfDir & "\") = LCase(localRoot) Or LCase(selfDir & "\") = LCase(prodRoot) Then
-        On Error Goto 0
-        Exit Sub
-    End If
-
-    tmpVbs = selfDir & "\watcher.vbs.upd"
-    tmpPs1 = selfDir & "\cd_burn.ps1.upd"
-    dstPs1 = selfDir & "\cd_burn.ps1"
+    tmpVbs     = selfDir & "\watcher.vbs.upd"
+    tmpPs1     = selfDir & "\cd_burn.ps1.upd"
+    dstPs1     = selfDir & "\cd_burn.ps1"
+    tmpHttpPs1 = selfDir & "\rsview_http_launch.ps1.upd"
 
     If HttpDownloadBinary(activeBaseUrl & "/watcher.vbs" & cacheBust, tmpVbs) Then
         chkHead = ""
@@ -382,6 +469,10 @@ Sub CheckSelfUpdate(smbState)
             If HttpDownloadBinary(activeBaseUrl & "/cd_burn.ps1" & cacheBust, tmpPs1) Then
                 objFSO.CopyFile tmpPs1, dstPs1, True
                 objFSO.DeleteFile tmpPs1, True
+            End If
+            If HttpDownloadBinary(activeBaseUrl & "/rsview_http_launch.ps1" & cacheBust, tmpHttpPs1) Then
+                objFSO.CopyFile tmpHttpPs1, dstHttpPs1, True
+                objFSO.DeleteFile tmpHttpPs1, True
             End If
 
             Err.Clear
@@ -435,8 +526,8 @@ Sub LaunchCdBurner(rawPayload, activeRootDir, viaChannel, smbState)
         objFSO.CopyFile sPs1, lPs1, True
     ElseIf objFSO.FileExists("C:\RSBASE\cd_burn.ps1") Then
         objFSO.CopyFile "C:\RSBASE\cd_burn.ps1", lPs1, True
-    Else
-        Call HttpDownloadBinary(prodHttpBase & "/cd_burn.ps1?t=" & CLng(Timer * 100), lPs1)
+    ElseIf Not HttpDownloadBinary(prodHttpBase & "/cd_burn.ps1?t=" & CLng(Timer * 100), lPs1) Then
+        Call HttpDownloadBinary(rsnextHttpBase & "/cd_burn.ps1?t=" & CLng(Timer * 100), lPs1)
     End If
 
     If objFSO.FileExists(lPs1) Then
@@ -456,18 +547,76 @@ Sub LaunchCdBurner(rawPayload, activeRootDir, viaChannel, smbState)
     On Error Goto 0
 End Sub
 
-Sub DispatchTriggerLine(rawLine, activeRootDir, viaChannel, smbState)
-    Dim dPos, mName, pLoad, cPath, lCmd, sFolder, pathReachable
+' ------------------------------------------------------------------------------
+' Launch Local RSViewer over Pure HTTP DICOM Cache (Zero-SMB)
+' ------------------------------------------------------------------------------
+Sub LaunchHttpDicomViewer(rawPayload, activeRootDir, viaChannel, smbState)
+    Dim pArr, bUrl, bKey, srcPs1, runPs1, cmdStr
     On Error Resume Next
+
+    pArr = Split(rawPayload, "|")
+    bUrl = ""
+    bKey = ""
+    If UBound(pArr) >= 0 Then bUrl = Trim(pArr(0))
+    If UBound(pArr) >= 1 Then bKey = Trim(pArr(1))
+    If Len(bUrl) = 0 Then Exit Sub
+
+    srcPs1 = ResolveHttpLauncherPs1()
+    runPs1 = objFSO.GetSpecialFolder(2) & "\rsbase_rsview_http_launch.ps1"
+    If Len(srcPs1) > 0 And objFSO.FileExists(srcPs1) Then
+        If LCase(srcPs1) <> LCase(runPs1) Then
+            objFSO.CopyFile srcPs1, runPs1, True
+        End If
+    End If
+
+    If objFSO.FileExists(runPs1) Then
+        Err.Clear
+        cmdStr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File """ & runPs1 & """ -BundleUrl """ & bUrl & """ -CacheKey """ & bKey & """"
+        objShell.Run cmdStr, 0, False
+        If Err.Number <> 0 Then
+            Call ReportClientEvent("ERROR", "LAUNCH_ERROR", "RSViewer HTTPランチャーの起動に失敗しました", "err=" & Err.Description & " | cmd=" & cmdStr, smbState, "1")
+            Err.Clear
+        End If
+    Else
+        Call ReportClientEvent("ERROR", "HTTP_LAUNCHER_MISSING", "RSViewer HTTP起動スクリプト (rsview_http_launch.ps1) が取得できませんでした", "url=" & bUrl, smbState, "1")
+        MsgBox "RSViewer HTTP起動スクリプト (rsview_http_launch.ps1) が見つかりません。" & vbCrLf & "RSBaseSetup.exe を実行して更新してください。", 16, "連携スクリプト不在"
+    End If
+    On Error Goto 0
+End Sub
+
+Sub DispatchTriggerLine(rawLine, activeRootDir, viaChannel, smbState)
+    Dim dPos, mName, pLoad, cPath, lCmd, sFolder, pathReachable, nowT
+    On Error Resume Next
+    rawLine = Trim(rawLine)
     If Len(rawLine) = 0 Then Exit Sub
+
+    ' 4-second duplicate suppression across SMB + HTTP channels
+    nowT = Timer
+    If rawLine = lastDispatchLine And Abs(nowT - lastDispatchTimer) < 4 Then
+        Exit Sub
+    End If
+    lastDispatchLine = rawLine
+    lastDispatchTimer = nowT
 
     dPos = InStr(rawLine, "|")
     If dPos > 0 Then
-        mName = Left(rawLine, dPos - 1)
+        mName = UCase(Trim(Left(rawLine, dPos - 1)))
         pLoad = Mid(rawLine, dPos + 1)
     Else
         mName = "NORMAL"
         pLoad = rawLine
+    End If
+
+    If mName = "HTTP_DICOM" Then
+        Call LaunchHttpDicomViewer(pLoad, activeRootDir, viaChannel, smbState)
+        On Error Goto 0
+        Exit Sub
+    End If
+
+    If mName = "NORMAL" And (Left(LCase(Trim(pLoad)), 7) = "http://" Or Left(LCase(Trim(pLoad)), 8) = "https://") Then
+        Call LaunchHttpDicomViewer(pLoad, activeRootDir, viaChannel, smbState)
+        On Error Goto 0
+        Exit Sub
     End If
 
     cPath = Replace(pLoad, "/", "\")
@@ -479,7 +628,7 @@ Sub DispatchTriggerLine(rawLine, activeRootDir, viaChannel, smbState)
     ElseIf mName = "ECG" Then
         If Not objFSO.FileExists(ecgExePath) Then
             Call ReportClientEvent("ERROR", "VIEWER_NOT_FOUND", "心電図ビューワ (FEV-05.exe) がこのPCに見つかりません", "expected=" & ecgExePath & " | target=" & cPath & " | via=" & viaChannel, smbState, "1")
-            MsgBox "このPCに心電図ビューワ (" & ecgExePath & ") がインストールされていないため起動できませんでした。" & vbCrLf & vbCrLf & "RS-Base画面の「閲覧」ボタンまたは表示モード「Web内蔵DICOM」からブラウザ上で心電図をご確認いただけます。", 48, "心電図ビューワ不在"
+            MsgBox "このPCに心電図ビューワ (" & ecgExePath & ") がインストールされていないため起動できませんでした。" & vbCrLf & vbCrLf & "RS-Base / RS-Next 画面のWeb心電図ビューワからブラウザ上で心電図をご確認いただけます。", 48, "心電図ビューワ不在"
         Else
             If InStr(cPath, "\") > 0 Then
                 pathReachable = objFSO.FileExists(cPath) Or objFSO.FolderExists(cPath)
@@ -519,14 +668,15 @@ Sub DispatchTriggerLine(rawLine, activeRootDir, viaChannel, smbState)
             End If
         End If
     Else
+        Call EnsureLocalRsViewerZeroSmb()
         If Not objFSO.FileExists(normalExePath) Then
             Call ReportClientEvent("ERROR", "VIEWER_NOT_FOUND", "RSViewer実行ファイル (rsview.exe) がこのPCに見つかりません", "expected=" & normalExePath & " | target=" & cPath & " | via=" & viaChannel, smbState, "1")
-            MsgBox "このPCに RSViewer (" & normalExePath & ") がインストールされていないため起動できませんでした。" & vbCrLf & vbCrLf & "RS-Base画面の「閲覧」ボタンまたは表示モード「Web内蔵DICOM」へ切り替えてご利用ください。", 48, "RSViewer不在"
+            MsgBox "このPCに RSViewer (" & normalExePath & ") がインストールされていないため起動できませんでした。" & vbCrLf & vbCrLf & "RSBaseSetup.exe を実行するか、Web内蔵DICOMビューワをご利用ください。", 48, "RSViewer不在"
         Else
             If InStr(cPath, "\") > 0 Then
                 pathReachable = objFSO.FolderExists(cPath) Or objFSO.FileExists(cPath)
                 If Not pathReachable Then
-                    Call ReportClientEvent("WARN", "TARGET_PATH_INACCESSIBLE", "検査データフォルダへこのPCからアクセスできません（共有資格情報・ネットワーク確認）", "target=" & cPath & " | via=" & viaChannel, smbState, "1")
+                    Call ReportClientEvent("WARN", "TARGET_PATH_INACCESSIBLE", "検査データフォルダへこのPCからアクセスできません", "target=" & cPath & " | via=" & viaChannel, smbState, "1")
                 End If
             End If
             Err.Clear
@@ -584,24 +734,22 @@ smbAnyAccessible = objFSO.FolderExists(prodRoot & "tmp\") Or objFSO.FolderExists
 lastSmbState = smbAnyAccessible
 
 If isSelfTest Then
+    Call EnsureLocalRsViewerZeroSmb()
     Call ReportClientEvent("INFO", "SELF_TEST", "watcher.vbs 自己診断テストを実行しました", "script=" & WScript.ScriptFullName, smbAnyAccessible, "1")
     WScript.Echo "SELF_TEST_OK ver=" & WATCHER_VERSION
     WScript.Quit 0
 End If
 
-' Initial Auto-Update check at startup
+' Initial Auto-Update check & Zero-SMB RSViewer heal/provision at startup
 Call CheckSelfUpdate(smbAnyAccessible)
+Call EnsureLocalRsViewerZeroSmb()
 
 ' Report Startup Diagnostics
-If smbAnyAccessible Then
-    Call ReportClientEvent("INFO", "STARTUP", "watcher.vbs (v" & WATCHER_VERSION & ") が常駐を開始しました (SMB共有モード)", "dir=" & selfDirPath, True, "1")
-Else
-    Call ReportClientEvent("WARN", "STARTUP", "watcher.vbs (v" & WATCHER_VERSION & ") が起動しました（共有フォルダ未接続のためHTTPポーリングで待機）", "expected_smb=" & prodRoot & "tmp\", False, "1")
-End If
+Call ReportClientEvent("INFO", "STARTUP", "watcher.vbs (v" & WATCHER_VERSION & ") が常駐を開始しました (RS-Base / RS-Next 統合HTTP連携モード)", "dir=" & selfDirPath & " | smb=" & Bool01(smbAnyAccessible), smbAnyAccessible, "1")
 
 loopCount = 0
 
-' Main Loop (checks every 0.75 second; avoids frequent WMI stalls on slow PCs)
+' Main Loop (checks every 0.75 second; dual RS-Base + RS-Next HTTP polling)
 Do While True
     On Error Resume Next
 
@@ -615,12 +763,14 @@ Do While True
 
     If loopCount > 0 And (loopCount Mod 800 = 0) Then
         Call CheckSelfUpdate(smbAnyAccessible)
+        Call EnsureLocalRsViewerZeroSmb()
         Call ReportClientEvent("INFO", "HEARTBEAT", "常駐稼働中", "", smbAnyAccessible, "0")
     End If
     loopCount = loopCount + 1
 
     triggered = False
     smbAnyAccessible = False
+    rsbaseSmbAccessible = False
 
     If objFSO.FolderExists("C:\Apache24\htdocs\rsnext\tmp\") Or objFSO.FolderExists(localRoot & "tmp\") Then
         candidateRoots = Array("C:\Apache24\htdocs\rsnext\", localRoot, prodRoot)
@@ -634,8 +784,11 @@ Do While True
 
         If objFSO.FolderExists(activeTmpDir) Then
             smbAnyAccessible = True
+            If activeRoot = prodRoot Or activeRoot = localRoot Then
+                rsbaseSmbAccessible = True
+            End If
 
-            If activeRoot = localRoot Then
+            If activeRoot = localRoot Or LCase(activeRoot) = "c:\apache24\htdocs\rsnext\" Then
                 If UBound(myIPs) >= 0 Then
                     checkIPs = Split("127.0.0.1," & Join(myIPs, ","), ",")
                 Else
@@ -671,7 +824,7 @@ Do While True
                     Exit For
                 End If
 
-                ' (2) Standard viewer / JPEG file (trigger_<IP>.txt)
+                ' (2) Standard viewer / HTTP_DICOM / JPEG file (trigger_<IP>.txt)
                 myTriggerFile = activeTmpDir & "trigger_" & currentIp & ".txt"
                 If objFSO.FileExists(myTriggerFile) Then
                     fileContent = ""
@@ -694,31 +847,35 @@ Do While True
         If triggered Then Exit For
     Next
 
-    ' Log SMB state transitions (once per change, never spamming)
-    If smbAnyAccessible <> lastSmbState Then
-        lastSmbState = smbAnyAccessible
-        If Not smbAnyAccessible Then
-            Call ReportClientEvent("WARN", "SMB_LOST", "共有フォルダへの接続が切れました（HTTPフォールバックへ切替）", "smb=" & prodRoot & "tmp\", False, "1")
+    lastSmbState = smbAnyAccessible
+
+    ' (3) HTTP Polling for 192.168.1.16/rsbase when SMB is not mounted
+    If (Not triggered) And (Not rsbaseSmbAccessible) Then
+        If rsbaseHttpCooldown > 0 Then
+            rsbaseHttpCooldown = rsbaseHttpCooldown - 1
         Else
-            Call ReportClientEvent("INFO", "SMB_RESTORED", "共有フォルダへの接続が復帰しました", "smb=" & prodRoot & "tmp\", True, "1")
+            httpPollText = HttpGetPoll(prodHttpBase & "/client_logs.php?action=poll_trigger&t=" & CLng(Timer * 100), 1000, httpConnOk)
+            If Not httpConnOk Then
+                rsbaseHttpCooldown = 20
+            ElseIf Len(httpPollText) > 0 And InStr(httpPollText, "<") = 0 Then
+                Call DispatchTriggerLine(httpPollText, "", "HTTP-RSBase", smbAnyAccessible)
+                triggered = True
+            End If
         End If
     End If
 
-    ' (3) HTTP Fallback Polling when shared folder (\\192.168.1.16\htdocs) is NOT mounted/shared on this PC
-    If (Not triggered) And (Not smbAnyAccessible) Then
-        httpPollText = HttpGetText(prodHttpBase & "/client_logs.php?action=poll_trigger&t=" & CLng(Timer * 100), 1500)
-        If Len(httpPollText) = 0 Then
-            httpPollText = HttpGetText(prodHttpBase & "/cd_export.php?action=poll_cdburn&t=" & CLng(Timer * 100), 1500)
-        End If
-        If Len(httpPollText) = 0 Then
-            httpPollText = HttpGetText("http://192.168.1.163/rsnext/cd_export.php?action=poll_cdburn&t=" & CLng(Timer * 100), 1200)
-        End If
-        If Len(httpPollText) = 0 Then
-            httpPollText = HttpGetText("http://192.168.1.164/rsnext/cd_export.php?action=poll_cdburn&t=" & CLng(Timer * 100), 1200)
-        End If
-        If Len(httpPollText) > 0 And InStr(httpPollText, "<") = 0 Then
-            Call DispatchTriggerLine(httpPollText, "", "HTTP", False)
-            triggered = True
+    ' (4) HTTP Polling for 192.168.1.163/rsnext ALWAYS (Zero-SMB native polling)
+    If Not triggered Then
+        If rsnextHttpCooldown > 0 Then
+            rsnextHttpCooldown = rsnextHttpCooldown - 1
+        Else
+            httpPollText = HttpGetPoll(rsnextHttpBase & "/client_logs.php?action=poll_trigger&t=" & CLng(Timer * 100), 1000, httpConnOk)
+            If Not httpConnOk Then
+                rsnextHttpCooldown = 20
+            ElseIf Len(httpPollText) > 0 And InStr(httpPollText, "<") = 0 Then
+                Call DispatchTriggerLine(httpPollText, "", "HTTP-RSNext", smbAnyAccessible)
+                triggered = True
+            End If
         End If
     End If
 

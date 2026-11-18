@@ -104,3 +104,50 @@ function rsnext_check_client_trigger_consumed(string $prefix, string $clientIp, 
     return false;
 }
 
+/**
+ * 検査が断層画像（CT / MRI / PET / NM 等）かどうかを判定
+ */
+function rsnext_is_tomographic_study(string $modality, string $kensamei = '', string $fileType = 'DICOM'): bool {
+    $ft = strtoupper(trim($fileType));
+    if (in_array($ft, ['ECG', 'PDF', 'VIDEO'], true)) {
+        return false;
+    }
+    $mod = strtoupper(trim($modality));
+    if (in_array($mod, ['CT', 'MR', 'MRI', 'PT', 'PET', 'NM'], true)) {
+        return true;
+    }
+    if ($kensamei !== '' && preg_match('/(?:^|[^A-Za-z])(CT|MRI|MRA|PET)(?:[^A-Za-z]|$)|MR検査|断層/iu', $kensamei)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * 現在のリクエストに対する RS-Next ベースURL (例: http://192.168.1.163/rsnext) を構築
+ */
+function rsnext_build_http_base_url(): string {
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = trim((string)($_SERVER['HTTP_HOST'] ?? ''));
+    if ($host === '') {
+        $host = trim((string)($_SERVER['SERVER_ADDR'] ?? '192.168.1.163'));
+    }
+    $scriptDir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/rsnext/index.php'))), '/');
+    return "{$scheme}://{$host}{$scriptDir}";
+}
+
+/**
+ * ゼロSMB・純粋HTTPストリーミング方式のローカル RSViewer 起動トリガー文字列を構築
+ */
+function rsnext_build_http_dicom_trigger_line(int $studyId, string $folder = ''): string {
+    $baseUrl = rsnext_build_http_base_url();
+    if ($studyId > 0) {
+        $bundleUrl = $baseUrl . '/dcm_api.php?action=dicom_bundle&study_id=' . $studyId;
+        $cacheKey  = 'rsnext_study_' . $studyId;
+    } else {
+        $bundleUrl = $baseUrl . '/dcm_api.php?action=dicom_bundle&folder=' . rawurlencode($folder);
+        $cacheKey  = 'rsnext_fld_' . substr(md5(strtolower(str_replace('/', '\\', trim($folder)))), 0, 14);
+    }
+    return 'HTTP_DICOM|' . $bundleUrl . '|' . $cacheKey;
+}
+
+

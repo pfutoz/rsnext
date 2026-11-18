@@ -156,6 +156,15 @@ if ($action === 'poll_trigger') {
         if (is_file($fp)) {
             $content = trim((string)@file_get_contents($fp));
             @unlink($fp);
+            // 共有ハブ側に書かれた同一トリガー残骸も掃除して二重発火を防止
+            $metaFp = preg_replace('/\.txt$/', '.hubmeta.json', $fp);
+            if ($metaFp && is_file($metaFp)) {
+                $meta = @json_decode((string)@file_get_contents($metaFp), true);
+                if (!empty($meta['hub_fp']) && @is_file((string)$meta['hub_fp'])) {
+                    @unlink((string)$meta['hub_fp']);
+                }
+                @unlink($metaFp);
+            }
             if ($content !== '') {
                 // cdburn_ ファイルでプレフィックスが無い場合は CDBURN| を補完
                 if (strpos(basename($fp), 'cdburn_') === 0 && strpos($content, 'CDBURN|') !== 0) {

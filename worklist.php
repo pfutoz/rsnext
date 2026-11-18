@@ -489,6 +489,10 @@ async function loadWorklist() {
         const viewUrl = o.linked_study_id
             ? ((o.linked_file_type === 'ECG' ? 'ecg_view.php' : 'dicom_view.php') + '?study_id=' + o.linked_study_id)
             : '';
+        const isTomoOrder = Boolean(o.linked_study_id && o.linked_file_type !== 'ECG' && (
+            ['CT', 'MR', 'MRI', 'PT', 'NM'].includes(String(o.modality || '').toUpperCase()) ||
+            /(?:^|[^A-Za-z])(CT|MRI|MRA|PET)(?:[^A-Za-z]|$)|MR検査|断層/i.test(String(o.kensamei || ''))
+        ));
 
         return `
             <div class="order-card st-${esc(o.status)}">
@@ -536,12 +540,28 @@ async function loadWorklist() {
                         ? `<button type="button" class="btn btn-sm" onclick="changeOrderStatus(${o.order_id}, 'CANCELLED')">取消</button>`
                         : ''}
                     ${viewUrl
-                        ? `<a href="${esc(viewUrl)}" target="_blank" class="btn btn-teal btn-sm">🖼️ 撮影画像を開く</a>`
+                        ? (isTomoOrder
+                            ? `<button type="button" class="btn btn-teal btn-sm" onclick="launchWorklistRsViewer(${o.linked_study_id})">🌀 RSViewerで開く</button>`
+                            : `<a href="${esc(viewUrl)}" target="_blank" class="btn btn-teal btn-sm">🖼️ 撮影画像を開く</a>`)
                         : ''}
                 </div>
             </div>
         `;
     }).join('');
+}
+
+function launchWorklistRsViewer(studyId) {
+    const fd = new URLSearchParams({ action: 'launch', study_id: String(studyId), launch_mode: 'HTTP_DICOM' });
+    fetch('index.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (d.status === 'success') {
+                showToast('🌀 断層データをローカル RSViewer で起動しています...');
+            } else {
+                alert(d.message || '起動エラー');
+            }
+        })
+        .catch(e => alert('通信エラー: ' + e.message));
 }
 
 function setRoomFilter(rg, btn) {
