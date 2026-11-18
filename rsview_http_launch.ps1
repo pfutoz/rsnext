@@ -418,37 +418,54 @@ try {
         throw "展開後のDICOMファイルが0件でした。"
     }
 
-    # SW_HIDE継承を完全に断ち切るため cmd.exe /c start "" 経由で通常ウィンドウ起動し、さらに最前面表示を保証
-    $existingPids = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+    # 1. RSView2D は単一インスタンス排他かつ起動時のみ FOLDER_F.LST を読み込む仕様のため、
+    #    既存プロセス（別検査や裏画面残存プロセス）があれば先に安全終了して検査切替を確実にする
+    Get-Process -Name "RSView", "RSView2D" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
+    # 2. WScript.Shell.Run(..., 1) [SW_SHOWNORMAL] で cmd.exe 引用符崩れ・SW_HIDE継承を完全回避して直接起動
     $wsh = New-Object -ComObject WScript.Shell
     $wsh.CurrentDirectory = $script:viewerDir
-    $launchCmd = 'cmd.exe /c start "" "' + $script:viewerExe + '" "' + $studyCacheDir + '"'
-    [void]$wsh.Run($launchCmd, 7, $false)
+    $directCmd = '"' + $script:viewerExe + '" "' + $studyCacheDir + '"'
+    [void]$wsh.Run($directCmd, 1, $false)
 
+    # 3. Delphi の実メインフォーム (TForm_MIV2) を検出して最前面フォーカスを保証
     try {
         Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
-public static class RsViewWin32 {
+public static class RsViewMiv2Focus {
+    public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int maxCount);
 }
 "@ -ErrorAction SilentlyContinue
-        for ($w = 0; $w -lt 12; $w++) {
+        $script:focusedMiv2 = $false
+        for ($w = 0; $w -lt 14; $w++) {
             Start-Sleep -Milliseconds 250
-            $cand = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Where-Object { $existingPids -notcontains $_.Id -and $_.MainWindowHandle -ne [IntPtr]::Zero })
-            if ($cand.Count -eq 0) {
-                $cand = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-            }
-            if ($cand.Count -gt 0) {
-                $h = $cand[0].MainWindowHandle
-                if (-not [RsViewWin32]::IsWindowVisible($h)) {
-                    [void][RsViewWin32]::ShowWindowAsync($h, 9)
+            $rsvPids = @(Get-Process -Name "RSView2D" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+            if ($rsvPids.Count -eq 0) { continue }
+            [RsViewMiv2Focus]::EnumWindows({
+                param($h, $l)
+                $pOut = [uint32]0
+                [void][RsViewMiv2Focus]::GetWindowThreadProcessId($h, [ref]$pOut)
+                if ($rsvPids -contains [int]$pOut) {
+                    $sbC = New-Object System.Text.StringBuilder 64
+                    [void][RsViewMiv2Focus]::GetClassName($h, $sbC, 64)
+                    if ($sbC.ToString() -eq "TForm_MIV2") {
+                        [void][RsViewMiv2Focus]::ShowWindowAsync($h, 9)
+                        [void][RsViewMiv2Focus]::SetForegroundWindow($h)
+                        $script:focusedMiv2 = $true
+                        return $false
+                    }
                 }
-                [void][RsViewWin32]::SetForegroundWindow($h)
-                break
-            }
+                return $true
+            }, [IntPtr]::Zero) | Out-Null
+            if ($script:focusedMiv2) { break }
         }
     } catch {}
 

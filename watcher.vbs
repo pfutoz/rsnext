@@ -1,7 +1,7 @@
-' --- watcher.vbs v2.4.1 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + Foreground Launch + Cache Clear) ---
+' --- watcher.vbs v2.4.2 (Unified RS-Base & RS-Next Zero-SMB HTTP DICOM + TForm_MIV2 Foreground + Mutex Reset) ---
 Option Explicit
 
-Const WATCHER_VERSION = "2.4.1"
+Const WATCHER_VERSION = "2.4.2"
 
 Dim objShell, objFSO, network, prodRoot, localRoot, prodHttpBase, rsnextHttpBase, localHttpBase
 Dim normalExePath, ecgExePath
